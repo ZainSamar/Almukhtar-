@@ -1,0 +1,70 @@
+:root {
+  --gold: #C9952A;
+  --gold-light: #F5C842;
+  --gold-pale: #FFF8E7;
+  --navy: #0D1B3E;
+  --navy-mid: #1B3060;
+  --navy-light: #2A4A8A;
+  --cream: #FAFAF7;
+  --surface: #FFFFFF;
+  --border: #E8E4DC;
+  --text: #1A1A2E;
+  --muted: #7A7A8C;
+  --success: #1A7A4A;
+  --success-bg: #E8F5EE;
+  --danger: #B22222;
+  --danger-bg: #FDE8E8;
+  --warn: #C75B00;
+  --warn-bg: #FEF0E0;
+  --radius: 12px;
+  --shadow: 0 2px 12px rgba(13,27,62,0.08);
+  --shadow-lg: 0 8px 32px rgba(13,27,62,0.14);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Cairo', sans-serif;
+  background: var(--cream);
+  color: var(--text);
+  min-height: 100vh;
+}
+
+body.ltr { direction: ltr; }
+
+button { font-family: inherit; cursor: pointer; }
+input, textarea, select { font-family: inherit; }
+
+.form-group { margin-bottom: 16px; }
+.form-group label {
+  display: block; font-size: 13px; font-weight: 600;
+  color: var(--navy); margin-bottom: 6px;
+}
+.form-control {
+  width: 100%; padding: 11px 14px; border: 1.5px solid var(--border);
+  border-radius: 10px; font-size: 14px; background: var(--cream);
+  color: var(--text); outline: none; transition: border-color 0.2s;
+}
+.form-control:focus { border-color: var(--gold); background: #fff; }
+textarea.form-control { resize: vertical; min-height: 80px; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px; padding: 11px 22px; border-radius: 10px; font-size: 14px;
+  font-weight: 700; cursor: pointer; border: none; transition: all 0.15s;
+}
+.btn-primary { background: var(--gold); color: #fff; }
+.btn-primary:hover { background: var(--gold-light); }
+.btn-navy { background: var(--navy); color: #fff; }
+.btn-outline { background: #fff; border: 2px solid var(--navy); color: var(--navy); }
+.btn-full { width: 100%; }
+.btn-lg { padding: 14px 28px; font-size: 16px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.badge {
+  display: inline-flex; align-items: center; padding: 3px 10px;
+  border-radius: 20px; font-size: 11px; font-weight: 700;
+}
+.badge-gold { background: var(--gold-pale); color: var(--gold); }
+.badge-green { background: var(--success-bg); color: var(--success); }
+.badge-red { background: var(--danger-bg); color: var(--danger); }

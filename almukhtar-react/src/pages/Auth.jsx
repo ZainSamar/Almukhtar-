@@ -1,207 +1,262 @@
-import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { supabase } from "../lib/supabase";
 
 export default function Auth() {
-  const navigate = useNavigate()
-  const [tab, setTab] = useState('login')
-  const [role, setRole] = useState('seller')
-  const [step, setStep] = useState(1)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [name, setName] = useState('')
-  const [phone, setPhone] = useState('')
-  const [otp, setOtp] = useState('')
-  const [agreed, setAgreed] = useState(false)
+  const [mode, setMode] = useState("login"); // login | register | otp
+  const [role, setRole] = useState("seller"); // seller | buyer
+  const [lang, setLang] = useState("ar");
+  const [phone, setPhone] = useState("");
+  const [otp, setOtp] = useState("");
+  const [name, setName] = useState("");
+  const [storeName, setStoreName] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [countdown, setCountdown] = useState(0);
+  const navigate = useNavigate();
+  const ar = lang === "ar";
 
-  const formatPhone = (p) => {
-    const clean = p.replace(/\D/g, '')
-    if (clean.startsWith('07')) return '+964' + clean.slice(1)
-    if (clean.startsWith('964')) return '+' + clean
-    return '+964' + clean
-  }
+  const startCountdown = () => {
+    setCountdown(60);
+    const timer = setInterval(() => {
+      setCountdown(prev => {
+        if (prev <= 1) { clearInterval(timer); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+  };
 
-  const sendOTP = async () => {
-    if (!phone || phone.length < 10) { setError('أدخل رقم هاتف صحيح'); return }
-    if (tab === 'register' && !name.trim()) { setError('أدخل اسمك الكامل'); return }
-    if (tab === 'register' && !agreed) { setError('يجب الموافقة على الشروط والأحكام'); return }
-    setLoading(true); setError('')
+  const formatPhone = (val) => {
+    let cleaned = val.replace(/\D/g, "");
+    if (cleaned.startsWith("0")) cleaned = "964" + cleaned.slice(1);
+    if (!cleaned.startsWith("964")) cleaned = "964" + cleaned;
+    return "+" + cleaned;
+  };
+
+  const handleSendOTP = async () => {
+    if (!phone || phone.length < 10) {
+      setError(ar ? "أدخل رقم هاتف صحيح" : "Enter a valid phone number");
+      return;
+    }
+    if (mode === "register" && !name) {
+      setError(ar ? "أدخل اسمك الكامل" : "Enter your full name");
+      return;
+    }
+    if (mode === "register" && role === "seller" && !storeName) {
+      setError(ar ? "أدخل اسم متجرك" : "Enter your store name");
+      return;
+    }
+    setLoading(true);
+    setError("");
     try {
-      await supabase.auth.signInWithOtp({ phone: formatPhone(phone) })
-    } catch(e) {}
-    setStep(2); setLoading(false)
-  }
+      const formattedPhone = formatPhone(phone);
+      const { error } = await supabase.auth.signInWithOtp({ phone: formattedPhone });
+      if (error) throw error;
+      setMode("otp");
+      startCountdown();
+    } catch (err) {
+      setError(ar ? "حدث خطأ، حاول مرة ثانية" : "An error occurred, please try again");
+    }
+    setLoading(false);
+  };
 
-  const verifyOTP = async () => {
-    if (!otp || otp.length < 4) { setError('أدخل رمز التحقق'); return }
-    setLoading(true); setError('')
+  const handleVerifyOTP = async () => {
+    if (!otp || otp.length < 6) {
+      setError(ar ? "أدخل الرمز المكون من 6 أرقام" : "Enter the 6-digit code");
+      return;
+    }
+    setLoading(true);
+    setError("");
     try {
+      const formattedPhone = formatPhone(phone);
       const { data, error } = await supabase.auth.verifyOtp({
-        phone: formatPhone(phone), token: otp, type: 'sms'
-      })
-      if (error) throw error
-      if (tab === 'register') {
-        await supabase.from('users').upsert({
-          id: data.user.id, phone: formatPhone(phone),
-          name, role, phone_verified: true
-        })
-        if (role === 'seller') {
-          const slug = name.toLowerCase().replace(/\s+/g,'-') + '-' + Date.now().toString().slice(-4)
-          await supabase.from('stores').insert({
-            owner_id: data.user.id, store_slug: slug,
-            name_ar: `متجر ${name}`, name_en: `${name}'s Store`
-          })
+        phone: formattedPhone,
+        token: otp,
+        type: "sms",
+      });
+      if (error) throw error;
+
+      // Save user profile
+      if (data.user) {
+        const slugName = storeName
+          ? storeName.replace(/\s+/g, "-").toLowerCase()
+          : "store-" + Date.now();
+
+        await supabase.from("users").upsert({
+          id: data.user.id,
+          phone: formattedPhone,
+          full_name: name,
+          role: role,
+          created_at: new Date().toISOString(),
+        });
+
+        if (role === "seller") {
+          await supabase.from("stores").upsert({
+            owner_id: data.user.id,
+            name: storeName,
+            slug: slugName,
+            city: "Baghdad",
+            is_active: true,
+            plan: "free",
+            created_at: new Date().toISOString(),
+          });
+          navigate("/dashboard");
+        } else {
+          navigate("/store");
         }
       }
-      navigate(role === 'seller' ? '/seller' : '/store/demo')
-    } catch(e) {
-      if (otp.length >= 4) { navigate(role === 'seller' ? '/seller' : '/store/demo') }
-      else { setError('رمز خاطئ، حاول مرة ثانية') }
+    } catch (err) {
+      setError(ar ? "الرمز غير صحيح، حاول مرة ثانية" : "Invalid code, please try again");
     }
-    setLoading(false)
-  }
+    setLoading(false);
+  };
 
   return (
-    <div style={{minHeight:'100vh',background:'linear-gradient(135deg,#0D1B3E 0%,#1B3060 100%)',display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
-      <div style={{background:'#fff',borderRadius:24,padding:'36px 28px',width:'100%',maxWidth:420,boxShadow:'0 8px 40px rgba(0,0,0,0.2)'}}>
+    <div dir={ar ? "rtl" : "ltr"} style={{ fontFamily: ar ? "'Tajawal',sans-serif" : "'Inter',sans-serif", background: "linear-gradient(135deg,#1a2b6b,#2d4499)", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
 
-        {/* Logo */}
-        <div style={{textAlign:'center',marginBottom:28}}>
-          <svg width="110" height="28" viewBox="0 0 110 28" fill="none">
-            <polyline points="3,26 55,3 107,26" stroke="#C9952A" strokeWidth="2" strokeLinejoin="round" fill="none"/>
-            <text x="55" y="21" textAnchor="middle" fontFamily="Georgia,serif" fontSize="8" fontWeight="bold" letterSpacing="2" fill="#C9952A">AL-MUKHTAR</text>
+      <div style={{ background: "white", borderRadius: 24, padding: "28px 24px", width: "100%", maxWidth: 400, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
+
+        {/* LOGO */}
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <svg width="100" height="38" viewBox="0 0 120 44" style={{ margin: "0 auto" }}>
+            <polygon points="10,22 60,4 110,22" fill="none" stroke="#1a2b6b" strokeWidth="2.5"/>
+            <line x1="14" y1="22" x2="14" y2="36" stroke="#1a2b6b" strokeWidth="2"/>
+            <line x1="106" y1="22" x2="106" y2="36" stroke="#1a2b6b" strokeWidth="2"/>
+            <line x1="14" y1="36" x2="106" y2="36" stroke="#1a2b6b" strokeWidth="2"/>
+            <text x="60" y="30" textAnchor="middle" fill="#1a2b6b" fontSize="10" fontWeight="700" fontFamily="Inter">AL-MUKHTAR</text>
           </svg>
-          <div style={{fontSize:20,fontWeight:900,color:'#0D1B3E',lineHeight:1,marginTop:2,fontFamily:'Cairo,sans-serif'}}>المختار</div>
-          <div style={{fontSize:10,color:'#C9952A',marginTop:2,fontFamily:'Cairo,sans-serif'}}>تجارتك في ايدك</div>
+          <div style={{ fontSize: 18, fontWeight: "800", color: "#1a2b6b", marginTop: 4 }}>المختار</div>
+          <div style={{ fontSize: 12, color: "#94a3b8" }}>{ar ? "تجارتك في ايدك" : "Your Business In Your Hands"}</div>
         </div>
 
-        {/* Tabs */}
-        {step === 1 && (
-          <div style={{display:'flex',border:'1.5px solid #E8E4DC',borderRadius:10,overflow:'hidden',marginBottom:24}}>
-            {['login','register'].map(t => (
-              <button key={t} onClick={() => setTab(t)} style={{
-                flex:1,padding:'10px',fontSize:14,fontWeight:700,border:'none',
-                cursor:'pointer',fontFamily:'Cairo,sans-serif',
-                background: tab===t ? '#0D1B3E' : 'transparent',
-                color: tab===t ? '#fff' : '#7A7A8C'
-              }}>{t==='login' ? 'تسجيل الدخول' : 'إنشاء حساب'}</button>
-            ))}
-          </div>
-        )}
+        {/* LANG TOGGLE */}
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 16 }}>
+          <button onClick={() => setLang(ar ? "en" : "ar")} style={{ background: "#f1f5f9", border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 11, cursor: "pointer", color: "#64748b", fontFamily: "inherit" }}>
+            {ar ? "EN" : "عربي"}
+          </button>
+        </div>
 
-        {step === 1 && (
+        {mode !== "otp" ? (
           <>
-            {/* Role */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:20}}>
-              {[
-                { id:'seller', title:'بائع', desc:'أدر متجرك', icon: (
-                  <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
-                    <path d="M4 20 L24 6 L44 20" stroke="#C9952A" strokeWidth="2" fill="none" strokeLinejoin="round"/>
-                    <rect x="6" y="20" width="36" height="24" rx="1" fill="#FFF8E7" stroke="#C9952A" strokeWidth="1.5"/>
-                    <path d="M19 44 L19 30 Q19 27 22 27 L26 27 Q29 27 29 30 L29 44" fill="#C9952A" opacity="0.3" stroke="#C9952A" strokeWidth="1.2"/>
-                    <rect x="9" y="24" width="8" height="8" rx="1" fill="none" stroke="#C9952A" strokeWidth="1.2"/>
-                    <rect x="31" y="24" width="8" height="8" rx="1" fill="none" stroke="#C9952A" strokeWidth="1.2"/>
-                  </svg>
-                )},
-                { id:'buyer', title:'مشتري', desc:'تسوق الآن', icon: (
-                  <svg width="40" height="40" viewBox="0 0 48 48" fill="none">
-                    <path d="M8 18 L10 42 Q10 44 12 44 L36 44 Q38 44 38 42 L40 18 Z" fill="#FFF8E7" stroke="#C9952A" strokeWidth="1.5" strokeLinejoin="round"/>
-                    <path d="M17 18 Q17 8 24 8 Q31 8 31 18" stroke="#C9952A" strokeWidth="2" fill="none" strokeLinecap="round"/>
-                    <rect x="21" y="6" width="6" height="4" rx="2" fill="#C9952A" opacity="0.4"/>
-                  </svg>
-                )}
-              ].map(r => (
-                <div key={r.id} onClick={() => setRole(r.id)} style={{
-                  border: `2px solid ${role===r.id ? '#C9952A' : '#E8E4DC'}`,
-                  borderRadius:12,padding:'14px 8px',textAlign:'center',
-                  cursor:'pointer',background: role===r.id ? '#FFF8E7' : '#FAFAF7'
-                }}>
-                  <div style={{marginBottom:6}}>{r.icon}</div>
-                  <div style={{fontSize:13,fontWeight:700,color:'#0D1B3E',fontFamily:'Cairo,sans-serif'}}>{r.title}</div>
-                  <div style={{fontSize:11,color:'#7A7A8C',fontFamily:'Cairo,sans-serif'}}>{r.desc}</div>
-                </div>
+            {/* MODE TABS */}
+            <div style={{ display: "flex", background: "#f1f5f9", borderRadius: 12, padding: 4, marginBottom: 20 }}>
+              {[["login", ar ? "تسجيل الدخول" : "Login"], ["register", ar ? "إنشاء حساب" : "Register"]].map(([m, l]) => (
+                <button key={m} onClick={() => { setMode(m); setError(""); }} style={{ flex: 1, background: mode === m ? "white" : "transparent", border: "none", borderRadius: 10, padding: "10px", fontSize: 13, fontWeight: mode === m ? "700" : "400", color: mode === m ? "#1a2b6b" : "#64748b", cursor: "pointer", fontFamily: "inherit", boxShadow: mode === m ? "0 2px 8px rgba(0,0,0,0.08)" : "none" }}>
+                  {l}
+                </button>
               ))}
             </div>
 
-            {tab === 'register' && (
-              <div style={{marginBottom:16}}>
-                <label style={{display:'block',fontSize:13,fontWeight:600,color:'#0D1B3E',marginBottom:6,fontFamily:'Cairo,sans-serif'}}>الاسم الكامل *</label>
-                <input style={{width:'100%',padding:'11px 14px',border:'1.5px solid #E8E4DC',borderRadius:10,fontSize:14,fontFamily:'Cairo,sans-serif',outline:'none',boxSizing:'border-box'}}
-                  type="text" placeholder="أدخل اسمك الكامل" value={name} onChange={e=>setName(e.target.value)}/>
+            {/* ROLE SELECT */}
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 12, color: "#64748b", fontWeight: "600", marginBottom: 8 }}>
+                {ar ? "أنا..." : "I am..."}
               </div>
-            )}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                {/* SELLER */}
+                <button onClick={() => setRole("seller")} style={{ background: role === "seller" ? "#f0f4ff" : "#f8fafc", border: `2px solid ${role === "seller" ? "#1a2b6b" : "#e2e8f0"}`, borderRadius: 14, padding: "14px 8px", cursor: "pointer", textAlign: "center", fontFamily: "inherit" }}>
+                  <svg width="40" height="40" viewBox="0 0 100 80" style={{ margin: "0 auto 6px" }}>
+                    <rect x="10" y="30" width="80" height="45" rx="4" fill={role === "seller" ? "#1a2b6b" : "#94a3b8"}/>
+                    <rect x="25" y="20" width="50" height="15" rx="2" fill={role === "seller" ? "#2d4499" : "#b0bec5"}/>
+                    <rect x="35" y="8" width="30" height="14" rx="2" fill={role === "seller" ? "#f0c040" : "#cfd8dc"}/>
+                    <rect x="38" y="45" width="24" height="30" rx="2" fill="white" opacity="0.3"/>
+                    <rect x="20" y="40" width="14" height="12" rx="1" fill="white" opacity="0.5"/>
+                    <rect x="66" y="40" width="14" height="12" rx="1" fill="white" opacity="0.5"/>
+                  </svg>
+                  <div style={{ fontWeight: "700", color: role === "seller" ? "#1a2b6b" : "#64748b", fontSize: 13 }}>{ar ? "بائع" : "Seller"}</div>
+                  <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{ar ? "أدر متجرك" : "Manage store"}</div>
+                </button>
 
-            <div style={{marginBottom:16}}>
-              <label style={{display:'block',fontSize:13,fontWeight:600,color:'#0D1B3E',marginBottom:6,fontFamily:'Cairo,sans-serif'}}>رقم الهاتف *</label>
-              <input style={{width:'100%',padding:'11px 14px',border:'1.5px solid #E8E4DC',borderRadius:10,fontSize:14,outline:'none',direction:'ltr',letterSpacing:1,boxSizing:'border-box'}}
-                type="tel" placeholder="07X XXXX XXXX" value={phone} onChange={e=>setPhone(e.target.value)}/>
-              <small style={{fontSize:11,color:'#7A7A8C',fontFamily:'Cairo,sans-serif'}}>سنرسل لك رمز تحقق على هذا الرقم</small>
+                {/* BUYER */}
+                <button onClick={() => setRole("buyer")} style={{ background: role === "buyer" ? "#f0f4ff" : "#f8fafc", border: `2px solid ${role === "buyer" ? "#1a2b6b" : "#e2e8f0"}`, borderRadius: 14, padding: "14px 8px", cursor: "pointer", textAlign: "center", fontFamily: "inherit" }}>
+                  <svg width="40" height="40" viewBox="0 0 100 80" style={{ margin: "0 auto 6px" }}>
+                    <path d="M20 15 Q18 10 10 10" stroke={role === "buyer" ? "#1a2b6b" : "#94a3b8"} strokeWidth="4" fill="none" strokeLinecap="round"/>
+                    <path d="M20 15 L30 55 Q32 62 40 62 L75 62 Q82 62 84 55 L90 28 Q91 22 85 22 L28 22 Z" fill={role === "buyer" ? "#1a2b6b" : "#94a3b8"}/>
+                    <circle cx="42" cy="70" r="7" fill={role === "buyer" ? "#f0c040" : "#b0bec5"}/>
+                    <circle cx="68" cy="70" r="7" fill={role === "buyer" ? "#f0c040" : "#b0bec5"}/>
+                    <path d="M45 38 L55 48 L70 30" stroke="white" strokeWidth="4" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                  <div style={{ fontWeight: "700", color: role === "buyer" ? "#1a2b6b" : "#64748b", fontSize: 13 }}>{ar ? "مشتري" : "Buyer"}</div>
+                  <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{ar ? "تسوق الآن" : "Shop now"}</div>
+                </button>
+              </div>
             </div>
 
-            {tab === 'register' && (
-              <div style={{display:'flex',alignItems:'flex-start',gap:10,marginBottom:16,padding:'12px',background:'#FFF8E7',borderRadius:10,border:'1px solid #C9952A'}}>
-                <input type="checkbox" checked={agreed} onChange={e=>setAgreed(e.target.checked)}
-                  style={{width:18,height:18,marginTop:2,accentColor:'#C9952A',cursor:'pointer',flexShrink:0}}/>
-                <label style={{fontSize:12,color:'#0D1B3E',fontFamily:'Cairo,sans-serif',cursor:'pointer',lineHeight:1.5}}>
-                  أوافق على <span style={{color:'#C9952A',fontWeight:700,cursor:'pointer'}} onClick={()=>navigate('/terms')}>شروط الخدمة وعقد الاشتراك</span> الخاص بمنصة المختار
-                </label>
-              </div>
+            {/* REGISTER FIELDS */}
+            {mode === "register" && (
+              <>
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, color: "#64748b", fontWeight: "600", marginBottom: 6 }}>{ar ? "الاسم الكامل *" : "Full Name *"}</div>
+                  <input value={name} onChange={e => setName(e.target.value)} placeholder={ar ? "أدخل اسمك الكامل" : "Enter your full name"} style={{ width: "100%", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "11px 14px", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none" }} />
+                </div>
+                {role === "seller" && (
+                  <div style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: "600", marginBottom: 6 }}>{ar ? "اسم المتجر *" : "Store Name *"}</div>
+                    <input value={storeName} onChange={e => setStoreName(e.target.value)} placeholder={ar ? "مثال: متجر النور" : "e.g. Al-Noor Store"} style={{ width: "100%", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "11px 14px", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none" }} />
+                    {storeName && (
+                      <div style={{ fontSize: 11, color: "#16a34a", marginTop: 4 }}>
+                        🔗 almukhtar.io/store/{storeName.replace(/\s+/g, "-").toLowerCase()}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
 
-            {error && <div style={{background:'#FDE8E8',color:'#B22222',padding:'10px 14px',borderRadius:10,fontSize:13,marginBottom:14,fontWeight:600,fontFamily:'Cairo,sans-serif'}}>{error}</div>}
+            {/* PHONE */}
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, color: "#64748b", fontWeight: "600", marginBottom: 6 }}>{ar ? "رقم الهاتف *" : "Phone Number *"}</div>
+              <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="07X XXXX XXXX" type="tel" style={{ width: "100%", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "11px 14px", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none", direction: "ltr" }} />
+              <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>{ar ? "سنرسل لك رمز تحقق على هذا الرقم" : "We'll send a verification code to this number"}</div>
+            </div>
 
-            <button onClick={sendOTP} disabled={loading} style={{
-              width:'100%',background:'#C9952A',color:'#fff',border:'none',borderRadius:12,
-              padding:14,fontSize:15,fontWeight:800,cursor:loading?'not-allowed':'pointer',
-              opacity:loading?0.7:1,fontFamily:'Cairo,sans-serif',boxShadow:'0 4px 16px rgba(201,149,42,0.3)'
-            }}>{loading ? '...' : 'إرسال رمز التحقق →'}</button>
+            {error && <div style={{ background: "#fef2f2", color: "#dc2626", borderRadius: 10, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
 
-            <button onClick={()=>navigate('/')} style={{
-              width:'100%',background:'transparent',color:'#7A7A8C',border:'none',
-              padding:12,fontSize:13,cursor:'pointer',marginTop:8,fontFamily:'Cairo,sans-serif'
-            }}>← العودة للرئيسية</button>
+            <button onClick={handleSendOTP} disabled={loading} style={{ background: loading ? "#94a3b8" : "#1a2b6b", color: "white", border: "none", borderRadius: 12, padding: "13px", width: "100%", fontWeight: "800", fontSize: 15, cursor: loading ? "not-allowed" : "pointer", fontFamily: "inherit", marginBottom: 14 }}>
+              {loading ? (ar ? "جاري الإرسال..." : "Sending...") : (ar ? "إرسال رمز التحقق ←" : "Send Verification Code →")}
+            </button>
+
+            <div style={{ textAlign: "center" }}>
+              <button onClick={() => navigate("/")} style={{ background: "none", border: "none", color: "#94a3b8", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+                {ar ? "← العودة للرئيسية" : "← Back to Home"}
+              </button>
+            </div>
           </>
-        )}
-
-        {step === 2 && (
+        ) : (
+          /* OTP SCREEN */
           <>
-            <div style={{textAlign:'center',marginBottom:24}}>
-              <div style={{fontSize:48,marginBottom:12}}>📱</div>
-              <h2 style={{fontSize:18,fontWeight:800,color:'#0D1B3E',marginBottom:8,fontFamily:'Cairo,sans-serif'}}>أدخل رمز التحقق</h2>
-              <p style={{fontSize:13,color:'#7A7A8C',fontFamily:'Cairo,sans-serif',lineHeight:1.5}}>
-                أرسلنا رمز SMS إلى<br/>
-                <strong style={{color:'#0D1B3E',direction:'ltr',display:'inline-block'}}>{formatPhone(phone)}</strong>
+            <div style={{ textAlign: "center", marginBottom: 20 }}>
+              <div style={{ fontSize: 48, marginBottom: 10 }}>📱</div>
+              <h3 style={{ fontSize: 17, fontWeight: "800", color: "#1e293b", margin: "0 0 8px" }}>
+                {ar ? "أدخل رمز التحقق" : "Enter Verification Code"}
+              </h3>
+              <p style={{ fontSize: 13, color: "#64748b", margin: 0 }}>
+                {ar ? `أرسلنا رمز إلى ${phone}` : `We sent a code to ${phone}`}
               </p>
             </div>
 
-            <div style={{marginBottom:16}}>
-              <input style={{
-                width:'100%',padding:14,border:'1.5px solid #E8E4DC',borderRadius:10,
-                fontSize:24,fontWeight:800,textAlign:'center',letterSpacing:8,
-                outline:'none',boxSizing:'border-box'
-              }} type="number" placeholder="● ● ● ● ● ●" value={otp}
-                onChange={e=>setOtp(e.target.value)} maxLength={6}/>
+            <div style={{ marginBottom: 16 }}>
+              <input value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="• • • • • •" maxLength={6} type="tel" style={{ width: "100%", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 12, padding: "16px", fontSize: 28, fontFamily: "monospace", boxSizing: "border-box", outline: "none", textAlign: "center", letterSpacing: 12, direction: "ltr" }} />
             </div>
 
-            <div style={{background:'#FFF8E7',border:'1px solid #C9952A',borderRadius:10,padding:'10px 14px',fontSize:12,color:'#C75B00',marginBottom:16,textAlign:'center',fontFamily:'Cairo,sans-serif'}}>
-              🧪 للتجربة الحين: أدخل أي 6 أرقام
+            {error && <div style={{ background: "#fef2f2", color: "#dc2626", borderRadius: 10, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
+
+            <button onClick={handleVerifyOTP} disabled={loading || otp.length < 6} style={{ background: loading || otp.length < 6 ? "#94a3b8" : "#1a2b6b", color: "white", border: "none", borderRadius: 12, padding: "13px", width: "100%", fontWeight: "800", fontSize: 15, cursor: loading || otp.length < 6 ? "not-allowed" : "pointer", fontFamily: "inherit", marginBottom: 14 }}>
+              {loading ? (ar ? "جاري التحقق..." : "Verifying...") : (ar ? "تأكيد الرمز ✓" : "Verify Code ✓")}
+            </button>
+
+            <div style={{ textAlign: "center" }}>
+              {countdown > 0 ? (
+                <span style={{ fontSize: 13, color: "#94a3b8" }}>{ar ? `إعادة الإرسال بعد ${countdown}ث` : `Resend in ${countdown}s`}</span>
+              ) : (
+                <button onClick={() => { setMode("login"); setOtp(""); setError(""); }} style={{ background: "none", border: "none", color: "#1a2b6b", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: "600" }}>
+                  {ar ? "إعادة إرسال الرمز" : "Resend Code"}
+                </button>
+              )}
             </div>
-
-            {error && <div style={{background:'#FDE8E8',color:'#B22222',padding:'10px 14px',borderRadius:10,fontSize:13,marginBottom:14,fontWeight:600,fontFamily:'Cairo,sans-serif'}}>{error}</div>}
-
-            <button onClick={verifyOTP} disabled={loading} style={{
-              width:'100%',background:'#C9952A',color:'#fff',border:'none',borderRadius:12,
-              padding:14,fontSize:15,fontWeight:800,cursor:loading?'not-allowed':'pointer',
-              opacity:loading?0.7:1,fontFamily:'Cairo,sans-serif',boxShadow:'0 4px 16px rgba(201,149,42,0.3)'
-            }}>{loading ? '...' : 'تأكيد الدخول ✓'}</button>
-
-            <button onClick={()=>{setStep(1);setOtp('');setError('')}} style={{
-              width:'100%',background:'transparent',color:'#7A7A8C',border:'none',
-              padding:12,fontSize:13,cursor:'pointer',marginTop:8,fontFamily:'Cairo,sans-serif'
-            }}>← تغيير رقم الهاتف</button>
           </>
         )}
       </div>
     </div>
-  )
+  );
 }

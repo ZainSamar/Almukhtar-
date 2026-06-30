@@ -27,12 +27,12 @@ export default function Auth() {
   };
 
   const formatPhone = (val) => {
-    let cleaned = val.replace(/\D/g, "");
-    if (cleaned.startsWith("0")) cleaned = "964" + cleaned.slice(1);
-    if (!cleaned.startsWith("964")) cleaned = "964" + cleaned;
-    return "+" + cleaned;
+    const cleaned = val.trim();
+    if (cleaned.startsWith("+")) return cleaned;
+    const digits = cleaned.replace(/\D/g, "");
+    if (digits.startsWith("0")) return "+964" + digits.slice(1);
+    return "+" + digits;
   };
-
   const handleSendOTP = async () => {
     if (!phone || phone.length < 10) {
       setError(ar ? "أدخل رقم هاتف صحيح" : "Enter a valid phone number");

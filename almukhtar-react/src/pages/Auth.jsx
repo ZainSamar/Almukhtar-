@@ -82,51 +82,46 @@ export default function Auth() {
     if (password !== confirmPassword) { setError(ar ? "كلمتا المرور غير متطابقتين" : "Passwords don't match"); return; }
     setLoading(true); setError("");
     try {
-      const { data, error } = await supabase.auth.updateUser({ 
-        password,
+      const fp = formatPhone(phone);
+      const signedAt = new Date().toISOString();
+      const slugName = storeName ? storeName.replace(/\s+/g, "-").toLowerCase() : "store-" + Date.now();
+
+      // Get current session
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("No user");
+
+      // Update password and email
+      await supabase.auth.updateUser({ password, email });
+
+      // Save to users table
+      await supabase.from("users").upsert({
+        id: user.id,
+        phone: fp,
         email,
+        full_name: name,
+        role,
+        terms_agreed: true,
+        terms_agreed_at: signedAt,
+        created_at: signedAt,
       });
-      if (error) throw error;
 
-      const user = data.user;
-      if (user) {
-        const fp = formatPhone(phone);
-        const slugName = storeName ? storeName.replace(/\s+/g, "-").toLowerCase() : "store-" + Date.now();
-        const signedAt = new Date().toISOString();
-
-        await supabase.from("users").upsert({
-          id: user.id,
-          phone: fp,
-          email,
-          full_name: name,
-          role,
-          terms_agreed: true,
-          terms_agreed_at: signedAt,
+      // Save store if seller
+      if (role === "seller") {
+        await supabase.from("stores").upsert({
+          owner_id: user.id,
+          name: storeName,
+          slug: slugName,
+          city: "Baghdad",
+          is_active: true,
+          plan: "free",
           created_at: signedAt,
         });
-
-        if (role === "seller") {
-          await supabase.from("stores").upsert({
-            owner_id: user.id,
-            name: storeName,
-            slug: slugName,
-            city: "Baghdad",
-            is_active: true,
-            plan: "free",
-            created_at: signedAt,
-          });
-
-          // Send terms email
-          await supabase.functions.invoke("send-terms-email", {
-            body: { email, name, storeName, signedAt }
-          }).catch(() => {}); // Don't block if email fails
-
-          navigate("/dashboard");
-        } else {
-          navigate("/store");
-        }
+        navigate("/dashboard");
+      } else {
+        navigate("/store");
       }
     } catch (err) {
+      console.error(err);
       setError(ar ? "حدث خطأ، حاول مرة ثانية" : "An error occurred");
     }
     setLoading(false);

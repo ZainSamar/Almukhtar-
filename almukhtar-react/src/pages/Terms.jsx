@@ -233,7 +233,7 @@ export default function Terms() {
           <div style={{ fontSize: 13, color: "rgba(255,255,255,0.8)", marginBottom: 16 }}>
             {ar ? "للتواصل والاستفسار: info@almukhtar.io" : "Contact: info@almukhtar.io"}
           </div>
-          <button onClick={() => navigate(-1)} style={{ background: "#f0c040", color: "#1a2b6b", border: "none", borderRadius: 12, padding: "12px 30px", fontWeight: "800", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
+          <button onClick={() => navigate("/register")} style={{ background: "#f0c040", color: "#1a2b6b", border: "none", borderRadius: 12, padding: "12px 30px", fontWeight: "800", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
             {ar ? "العودة للتسجيل" : "Back to Registration"}
           </button>
         </div>

@@ -11,7 +11,7 @@ export default function Terms() {
 
       {/* HEADER */}
       <div style={{ background: "#1a2b6b", padding: "0 20px", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100 }}>
-        <button onClick={() => navigate(-1)} style={{ background: "transparent", border: "none", color: "white", fontSize: 14, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
+        <button onClick={() => navigate("/register")} style={{ background: "transparent", border: "none", color: "white", fontSize: 14, cursor: "pointer", fontFamily: "inherit", display: "flex", alignItems: "center", gap: 6 }}>
           {ar ? "→ رجوع" : "← Back"}
         </button>
         <span style={{ color: "white", fontWeight: "700", fontSize: 14 }}>{ar ? "الشروط والأحكام" : "Terms & Conditions"}</span>

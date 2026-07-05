@@ -98,7 +98,7 @@ export default function Auth() {
         id: user.id,
         phone: fp,
         email,
-        full_name: name,
+        name: name,
         role,
         terms_agreed: true,
         terms_agreed_at: signedAt,

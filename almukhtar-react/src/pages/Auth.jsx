@@ -113,7 +113,7 @@ export default function Auth() {
       await supabase.auth.updateUser({ password, email });
       await supabase.from("users").upsert({ id: user.id, phone: fp, email, name, role, terms_agreed: true, terms_agreed_at: signedAt, created_at: signedAt });
       if (role === "seller") {
-        await supabase.from("stores").upsert({ owner_id: user.id, name_ar: storeName, name_en: storeName, store_slug: slugName, city, is_active: true, plan: "free", created_at: signedAt });
+        await supabase.from("stores").insert({ owner_id: user.id, name_ar: storeName, name_en: storeName, store_slug: slugName, city, is_active: true, plan: "free", created_at: signedAt });
         navigate("/dashboard");
       } else {
         navigate("/store");

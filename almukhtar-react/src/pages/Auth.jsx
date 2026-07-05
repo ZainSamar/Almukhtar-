@@ -16,12 +16,35 @@ export default function Auth() {
   const [otp, setOtp] = useState("");
   const [name, setName] = useState("");
   const [storeName, setStoreName] = useState("");
+  const [city, setCity] = useState("");
   const [agreedToTerms, setAgreedToTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [countdown, setCountdown] = useState(0);
   const navigate = useNavigate();
   const ar = lang === "ar";
+
+  const CITIES = [
+    { value: "Baghdad", ar: "بغداد" },
+    { value: "Basra", ar: "البصرة" },
+    { value: "Mosul", ar: "الموصل" },
+    { value: "Erbil", ar: "أربيل" },
+    { value: "Najaf", ar: "النجف" },
+    { value: "Karbala", ar: "كربلاء" },
+    { value: "Kirkuk", ar: "كركوك" },
+    { value: "Sulaymaniyah", ar: "السليمانية" },
+    { value: "Diyala", ar: "ديالى" },
+    { value: "Anbar", ar: "الأنبار" },
+    { value: "Wasit", ar: "واسط" },
+    { value: "Babylon", ar: "بابل" },
+    { value: "Dhi Qar", ar: "ذي قار" },
+    { value: "Maysan", ar: "ميسان" },
+    { value: "Muthanna", ar: "المثنى" },
+    { value: "Qadisiyyah", ar: "القادسية" },
+    { value: "Saladin", ar: "صلاح الدين" },
+    { value: "Duhok", ar: "دهوك" },
+    { value: "Halabja", ar: "حلبجة" },
+  ];
 
   const startCountdown = () => {
     setCountdown(60);
@@ -41,12 +64,12 @@ export default function Auth() {
     return "+" + digits;
   };
 
-  // STEP 1 — Send OTP
   const handleSendOTP = async () => {
     if (!phone || phone.length < 10) { setError(ar ? "أدخل رقم هاتف صحيح" : "Enter a valid phone number"); return; }
     if (!name) { setError(ar ? "أدخل اسمك الكامل" : "Enter your full name"); return; }
     if (!email || !email.includes("@")) { setError(ar ? "أدخل بريد إلكتروني صحيح" : "Enter a valid email"); return; }
     if (role === "seller" && !storeName) { setError(ar ? "أدخل اسم متجرك" : "Enter your store name"); return; }
+    if (role === "seller" && !city) { setError(ar ? "اختر محافظتك" : "Select your governorate"); return; }
     if (!agreedToTerms) { setError(ar ? "يجب الموافقة على الشروط والأحكام للمتابعة" : "You must agree to the terms to continue"); return; }
     setLoading(true); setError("");
     try {
@@ -61,7 +84,6 @@ export default function Auth() {
     setLoading(false);
   };
 
-  // STEP 2 — Verify OTP
   const handleVerifyOTP = async () => {
     if (!otp || otp.length < 6) { setError(ar ? "أدخل الرمز المكون من 6 أرقام" : "Enter the 6-digit code"); return; }
     setLoading(true); setError("");
@@ -76,7 +98,6 @@ export default function Auth() {
     setLoading(false);
   };
 
-  // STEP 3 — Set password and save profile
   const handleSetPassword = async () => {
     if (!password || password.length < 6) { setError(ar ? "كلمة المرور يجب أن تكون 6 أحرف على الأقل" : "Password must be at least 6 characters"); return; }
     if (password !== confirmPassword) { setError(ar ? "كلمتا المرور غير متطابقتين" : "Passwords don't match"); return; }
@@ -86,14 +107,11 @@ export default function Auth() {
       const signedAt = new Date().toISOString();
       const slugName = storeName ? storeName.replace(/\s+/g, "-").toLowerCase() : "store-" + Date.now();
 
-      // Get current session
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("No user");
 
-      // Update password and email
       await supabase.auth.updateUser({ password, email });
 
-      // Save to users table
       await supabase.from("users").upsert({
         id: user.id,
         phone: fp,
@@ -105,13 +123,13 @@ export default function Auth() {
         created_at: signedAt,
       });
 
-      // Save store if seller
       if (role === "seller") {
         await supabase.from("stores").upsert({
           owner_id: user.id,
-          name: storeName,
-          slug: slugName,
-          city: "Baghdad",
+          name_ar: storeName,
+          name_en: storeName,
+          store_slug: slugName,
+          city: city,
           is_active: true,
           plan: "free",
           created_at: signedAt,
@@ -127,7 +145,6 @@ export default function Auth() {
     setLoading(false);
   };
 
-  // LOGIN
   const handleLogin = async () => {
     if (!phone || phone.length < 10) { setError(ar ? "أدخل رقم الهاتف" : "Enter phone number"); return; }
     if (!password) { setError(ar ? "أدخل كلمة المرور" : "Enter password"); return; }
@@ -145,7 +162,6 @@ export default function Auth() {
     setLoading(false);
   };
 
-  // Styles
   const inputStyle = { width: "100%", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "11px 14px", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none" };
   const labelStyle = { fontSize: 12, color: "#64748b", fontWeight: "600", marginBottom: 6, display: "block" };
   const btnPrimary = (disabled) => ({ background: disabled ? "#94a3b8" : "#1a2b6b", color: "white", border: "none", borderRadius: 12, padding: "13px", width: "100%", fontWeight: "800", fontSize: 15, cursor: disabled ? "not-allowed" : "pointer", fontFamily: "inherit", marginBottom: 14 });
@@ -154,7 +170,6 @@ export default function Auth() {
     <div dir={ar ? "rtl" : "ltr"} style={{ fontFamily: ar ? "'Tajawal',sans-serif" : "'Inter',sans-serif", background: "linear-gradient(135deg,#1a2b6b,#2d4499)", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div style={{ background: "white", borderRadius: 24, padding: "28px 24px", width: "100%", maxWidth: 420, boxShadow: "0 20px 60px rgba(0,0,0,0.3)" }}>
 
-        {/* LOGO */}
         <div style={{ textAlign: "center", marginBottom: 16 }}>
           <svg width="90" height="34" viewBox="0 0 120 44" style={{ margin: "0 auto" }}>
             <polygon points="10,22 60,4 110,22" fill="none" stroke="#1a2b6b" strokeWidth="2.5"/>
@@ -167,14 +182,12 @@ export default function Auth() {
           <div style={{ fontSize: 11, color: "#94a3b8" }}>{ar ? "تجارتك في ايدك" : "Your Business In Your Hands"}</div>
         </div>
 
-        {/* LANG */}
         <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
           <button onClick={() => setLang(ar ? "en" : "ar")} style={{ background: "#f1f5f9", border: "none", borderRadius: 6, padding: "4px 10px", fontSize: 11, cursor: "pointer", color: "#64748b", fontFamily: "inherit" }}>
             {ar ? "EN" : "عربي"}
           </button>
         </div>
 
-        {/* TABS */}
         {(mode === "login" || mode === "register") && (
           <div style={{ display: "flex", background: "#f1f5f9", borderRadius: 12, padding: 4, marginBottom: 18 }}>
             {[["login", ar ? "تسجيل الدخول" : "Login"], ["register", ar ? "إنشاء حساب" : "Register"]].map(([m, l]) => (
@@ -185,14 +198,13 @@ export default function Auth() {
           </div>
         )}
 
-        {/* ===== LOGIN ===== */}
+        {/* LOGIN */}
         {mode === "login" && (
           <>
             <div style={{ marginBottom: 14 }}>
               <label style={labelStyle}>{ar ? "رقم الهاتف" : "Phone Number"}</label>
               <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="07X XXXX XXXX" type="tel" style={{ ...inputStyle, direction: "ltr" }} />
             </div>
-
             <div style={{ marginBottom: 20 }}>
               <label style={labelStyle}>{ar ? "كلمة المرور" : "Password"}</label>
               <div style={{ position: "relative" }}>
@@ -202,9 +214,7 @@ export default function Auth() {
                 </button>
               </div>
             </div>
-
             {error && <div style={{ background: "#fef2f2", color: "#dc2626", borderRadius: 10, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
-
             <button onClick={handleLogin} disabled={loading} style={btnPrimary(loading)}>
               {loading ? (ar ? "جاري الدخول..." : "Logging in...") : (ar ? "تسجيل الدخول ←" : "Login →")}
             </button>
@@ -216,10 +226,9 @@ export default function Auth() {
           </>
         )}
 
-        {/* ===== REGISTER ===== */}
+        {/* REGISTER */}
         {mode === "register" && (
           <>
-            {/* ROLE */}
             <div style={{ marginBottom: 14 }}>
               <label style={labelStyle}>{ar ? "أنا..." : "I am..."}</label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -239,11 +248,23 @@ export default function Auth() {
             </div>
 
             {role === "seller" && (
-              <div style={{ marginBottom: 12 }}>
-                <label style={labelStyle}>{ar ? "اسم المتجر *" : "Store Name *"}</label>
-                <input value={storeName} onChange={e => setStoreName(e.target.value)} placeholder={ar ? "مثال: متجر النور" : "e.g. Al-Noor Store"} style={inputStyle} />
-                {storeName && <div style={{ fontSize: 11, color: "#16a34a", marginTop: 4 }}>🔗 almukhtar.io/store/{storeName.replace(/\s+/g, "-").toLowerCase()}</div>}
-              </div>
+              <>
+                <div style={{ marginBottom: 12 }}>
+                  <label style={labelStyle}>{ar ? "اسم المتجر *" : "Store Name *"}</label>
+                  <input value={storeName} onChange={e => setStoreName(e.target.value)} placeholder={ar ? "مثال: متجر النور" : "e.g. Al-Noor Store"} style={inputStyle} />
+                  {storeName && <div style={{ fontSize: 11, color: "#16a34a", marginTop: 4 }}>🔗 almukhtar.io/store/{storeName.replace(/\s+/g, "-").toLowerCase()}</div>}
+                </div>
+
+                <div style={{ marginBottom: 12 }}>
+                  <label style={labelStyle}>{ar ? "المحافظة *" : "Governorate *"}</label>
+                  <select value={city} onChange={e => setCity(e.target.value)} style={{ ...inputStyle, cursor: "pointer" }}>
+                    <option value="">{ar ? "اختر محافظتك" : "Select your governorate"}</option>
+                    {CITIES.map(c => (
+                      <option key={c.value} value={c.value}>{ar ? c.ar : c.value}</option>
+                    ))}
+                  </select>
+                </div>
+              </>
             )}
 
             <div style={{ marginBottom: 12 }}>
@@ -258,7 +279,6 @@ export default function Auth() {
               <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>{ar ? "سنرسل رمز تحقق لتأكيد هويتك" : "We'll send a verification code"}</div>
             </div>
 
-            {/* TERMS */}
             <div onClick={() => setAgreedToTerms(!agreedToTerms)} style={{ display: "flex", alignItems: "flex-start", gap: 10, background: agreedToTerms ? "#f0fdf4" : "#f8fafc", border: `1.5px solid ${agreedToTerms ? "#16a34a" : "#e2e8f0"}`, borderRadius: 12, padding: "12px 14px", marginBottom: 16, cursor: "pointer" }}>
               <div style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${agreedToTerms ? "#16a34a" : "#cbd5e1"}`, background: agreedToTerms ? "#16a34a" : "white", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
                 {agreedToTerms && <span style={{ color: "white", fontSize: 13, fontWeight: "700" }}>✓</span>}
@@ -285,7 +305,7 @@ export default function Auth() {
           </>
         )}
 
-        {/* ===== OTP ===== */}
+        {/* OTP */}
         {mode === "otp" && (
           <>
             <div style={{ textAlign: "center", marginBottom: 20 }}>
@@ -293,11 +313,8 @@ export default function Auth() {
               <h3 style={{ fontSize: 16, fontWeight: "800", color: "#1e293b", margin: "0 0 6px" }}>{ar ? "أدخل رمز التحقق" : "Enter Verification Code"}</h3>
               <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>{ar ? `أرسلنا رمز إلى ${phone}` : `Sent to ${phone}`}</p>
             </div>
-
             <input value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="• • • • • •" maxLength={6} type="tel" style={{ ...inputStyle, fontSize: 26, fontFamily: "monospace", textAlign: "center", letterSpacing: 12, direction: "ltr", marginBottom: 16, padding: "14px" }} />
-
             {error && <div style={{ background: "#fef2f2", color: "#dc2626", borderRadius: 10, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
-
             <button onClick={handleVerifyOTP} disabled={loading || otp.length < 6} style={btnPrimary(loading || otp.length < 6)}>
               {loading ? (ar ? "جاري التحقق..." : "Verifying...") : (ar ? "تأكيد الرمز ✓" : "Verify ✓")}
             </button>
@@ -310,7 +327,7 @@ export default function Auth() {
           </>
         )}
 
-        {/* ===== SET PASSWORD ===== */}
+        {/* SET PASSWORD */}
         {mode === "setpassword" && (
           <>
             <div style={{ textAlign: "center", marginBottom: 18 }}>
@@ -318,7 +335,6 @@ export default function Auth() {
               <h3 style={{ fontSize: 16, fontWeight: "800", color: "#1e293b", margin: "0 0 6px" }}>{ar ? "اختر كلمة المرور" : "Set Your Password"}</h3>
               <p style={{ fontSize: 12, color: "#64748b", margin: 0 }}>{ar ? "ستستخدمها في كل مرة تدخل فيها" : "You'll use this every time you login"}</p>
             </div>
-
             <div style={{ marginBottom: 14 }}>
               <label style={labelStyle}>{ar ? "كلمة المرور" : "Password"}</label>
               <div style={{ position: "relative" }}>
@@ -329,7 +345,6 @@ export default function Auth() {
               </div>
               <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 4 }}>{ar ? "6 أحرف على الأقل" : "At least 6 characters"}</div>
             </div>
-
             <div style={{ marginBottom: 20 }}>
               <label style={labelStyle}>{ar ? "تأكيد كلمة المرور" : "Confirm Password"}</label>
               <div style={{ position: "relative" }}>
@@ -341,14 +356,10 @@ export default function Auth() {
               {confirmPassword && confirmPassword !== password && <div style={{ fontSize: 11, color: "#ef4444", marginTop: 4 }}>{ar ? "كلمتا المرور غير متطابقتين" : "Passwords don't match"}</div>}
               {confirmPassword && confirmPassword === password && <div style={{ fontSize: 11, color: "#16a34a", marginTop: 4 }}>✓ {ar ? "متطابقتان" : "Match"}</div>}
             </div>
-
-            {/* Terms reminder */}
             <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#15803d" }}>
               ✓ {ar ? `وقّعت على عقد الشروط والأحكام — سيُرسل نسخة إلى ${email}` : `You signed the terms — a copy will be sent to ${email}`}
             </div>
-
             {error && <div style={{ background: "#fef2f2", color: "#dc2626", borderRadius: 10, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
-
             <button onClick={handleSetPassword} disabled={loading || !password || password !== confirmPassword} style={btnPrimary(loading || !password || password !== confirmPassword)}>
               {loading ? (ar ? "جاري إنشاء الحساب..." : "Creating...") : (ar ? "إنشاء الحساب ✓" : "Create Account ✓")}
             </button>

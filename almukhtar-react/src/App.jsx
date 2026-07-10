@@ -1,3 +1,4 @@
+import StoreSetup from './pages/StoreSetup.jsx'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import Landing from './pages/Landing.jsx'
 import Auth from './pages/Auth.jsx'
@@ -9,6 +10,7 @@ function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/setup" element={<StoreSetup />} />
         <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Auth />} />
         <Route path="/register" element={<Auth />} />

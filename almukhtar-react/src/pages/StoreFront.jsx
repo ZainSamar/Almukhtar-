@@ -1,34 +1,157 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
 
-// ============ إعدادات المتجر ============
-const STORE_NAME_EN = 'AZYAA SAMAR'
-const STORE_NAME_AR = 'أزياء سمر'
-const ANNOUNCEMENT = 'Delivery across Iraq | التوصيل لكافة محافظات العراق'
-const EXCHANGE_RATE = 1500 // سعر صرف الدولار — عدّله حسب السوق
+// ================================================================
+//  نظام الثيمات — كل نوع متجر له هوية كاملة (ألوان + نصوص + فئات)
+//  نوع المتجر يُقرأ تلقائياً من جدول stores (عمود store_type)
+// ================================================================
 
-// صورة الهيرو — بدّل الرابط بصورة فستان/موديل من Supabase Storage أو أي رابط مباشر
-const HERO_IMAGE = ''
+const EXCHANGE_RATE = 1500 // سعر صرف الدولار مقابل الدينار
 
-// ألوان الهوية
-const NAVY = '#0A1D37'
-const GOLD = '#F5B93E'
-const LIGHTBLUE = '#3B82C4'
-const WA_GREEN = '#25D366'
+const THEMES = {
+  // ---------- متجر أزياء وملابس ----------
+  fashion: {
+    primary: '#0A1D37',
+    accent: '#F5B93E',
+    accentText: '#111111',
+    soft: '#FFF8E8',
+    announceBg: '#3B82C4',
+    tagline: 'أناقة تليق بكِ',
+    announce: 'التوصيل لكافة محافظات العراق | Delivery across Iraq',
+    heroKicker: 'وصلنا حديثاً ✨',
+    heroTitle: 'أرقى الفساتين والأزياء لهذا الموسم',
+    heroCta: 'تسوقي الآن',
+    buyLabel: 'إضافة إلى السلة',
+    inquireLabel: 'استفسر عن السعر',
+    emptyMsg: 'لا توجد قطع في هذه الفئة حالياً',
+    aspect: '3 / 4',
+    catLabels: {
+      clothes: { label: 'الأزياء', icon: '👗' },
+      shoes: { label: 'الأحذية', icon: '👠' },
+      accessories: { label: 'الإكسسوارات', icon: '💍' },
+      beauty: { label: 'العناية والجمال', icon: '💄' },
+      bags: { label: 'الحقائب', icon: '👜' },
+      other: { label: 'أخرى', icon: '🛍️' },
+    },
+  },
 
-// الفئات — id يطابق قيمة category المحفوظة في قاعدة البيانات
-const CATEGORIES = [
-  { id: 'all', label: 'الكل', icon: '🛍️' },
-  { id: 'clothes', label: 'الفساتين والأزياء', icon: '👗' },
-  { id: 'shoes', label: 'الأحذية', icon: '👠' },
-  { id: 'accessories', label: 'الإكسسوارات', icon: '💍' },
-  { id: 'beauty', label: 'العناية والجمال', icon: '💄' },
-  { id: 'realestate', label: 'عقارات', icon: '🏠' },
-  { id: 'services', label: 'خدمات', icon: '🛠️' },
-  { id: 'other', label: 'أخرى', icon: '📦' },
-]
+  // ---------- مكتب عقارات ----------
+  realestate: {
+    primary: '#1B3A2D',
+    accent: '#C9A227',
+    accentText: '#111111',
+    soft: '#F2F7F1',
+    announceBg: '#2E5E46',
+    tagline: 'عقارك الموثوق في العراق',
+    announce: 'بيع • شراء • إيجار | خدمة معتمدة وموثوقة',
+    heroKicker: 'عروض جديدة 🏠',
+    heroTitle: 'أفضل العقارات المختارة بعناية',
+    heroCta: 'تصفح العقارات',
+    buyLabel: 'تفاصيل العقار',
+    inquireLabel: 'استفسر عن السعر',
+    emptyMsg: 'لا توجد عقارات معروضة حالياً',
+    aspect: '4 / 3',
+    catLabels: {
+      realestate: { label: 'الكل', icon: '🏠' },
+      apartment: { label: 'شقق', icon: '🏢' },
+      house: { label: 'بيوت', icon: '🏡' },
+      land: { label: 'أراضي', icon: '📐' },
+      commercial: { label: 'تجاري', icon: '🏬' },
+      other: { label: 'أخرى', icon: '📦' },
+    },
+  },
 
-// ============ أدوات مساعدة ============
+  // ---------- مقدم خدمات ----------
+  services: {
+    primary: '#123E4D',
+    accent: '#2FB6A3',
+    accentText: '#ffffff',
+    soft: '#EEF8F6',
+    announceBg: '#1C5D71',
+    tagline: 'خدمة احترافية تستحقها',
+    announce: 'نخدم جميع مناطق بغداد والمحافظات',
+    heroKicker: 'خدماتنا 🛠️',
+    heroTitle: 'خدمات موثوقة بأيدي محترفين',
+    heroCta: 'استعرض الخدمات',
+    buyLabel: 'احجز الخدمة',
+    inquireLabel: 'اطلب عرض سعر',
+    emptyMsg: 'لا توجد خدمات معروضة حالياً',
+    aspect: '4 / 3',
+    catLabels: {
+      services: { label: 'الكل', icon: '🛠️' },
+      maintenance: { label: 'صيانة', icon: '🔧' },
+      cleaning: { label: 'تنظيف', icon: '🧹' },
+      transport: { label: 'نقل', icon: '🚚' },
+      design: { label: 'تصميم', icon: '🎨' },
+      other: { label: 'أخرى', icon: '📦' },
+    },
+  },
+
+  // ---------- متجر إلكترونيات ----------
+  electronics: {
+    primary: '#101828',
+    accent: '#38BDF8',
+    accentText: '#062033',
+    soft: '#EFF8FF',
+    announceBg: '#1D4ED8',
+    tagline: 'أحدث التقنيات بين يديك',
+    announce: 'ضمان حقيقي | توصيل لكافة المحافظات',
+    heroKicker: 'وصل حديثاً ⚡',
+    heroTitle: 'أحدث الأجهزة والإلكترونيات',
+    heroCta: 'تسوق الآن',
+    buyLabel: 'إضافة إلى السلة',
+    inquireLabel: 'استفسر عن السعر',
+    emptyMsg: 'لا توجد منتجات في هذه الفئة حالياً',
+    aspect: '1 / 1',
+    catLabels: {
+      electronics: { label: 'الكل', icon: '📱' },
+      phones: { label: 'موبايلات', icon: '📱' },
+      computers: { label: 'كمبيوتر', icon: '💻' },
+      audio: { label: 'سماعات', icon: '🎧' },
+      gaming: { label: 'ألعاب', icon: '🎮' },
+      other: { label: 'أخرى', icon: '📦' },
+    },
+  },
+
+  // ---------- متجر عام (الافتراضي) ----------
+  general: {
+    primary: '#0A1D37',
+    accent: '#F5B93E',
+    accentText: '#111111',
+    soft: '#FFF8E8',
+    announceBg: '#3B82C4',
+    tagline: 'سوقك العراقي الموثوق',
+    announce: 'التوصيل لكافة محافظات العراق',
+    heroKicker: 'وصلنا حديثاً ✨',
+    heroTitle: 'أفضل المنتجات المختارة لك',
+    heroCta: 'تسوق الآن',
+    buyLabel: 'إضافة إلى السلة',
+    inquireLabel: 'استفسر عن السعر',
+    emptyMsg: 'لا توجد منتجات حالياً',
+    aspect: '1 / 1',
+    catLabels: {
+      clothes: { label: 'ملابس', icon: '👗' },
+      realestate: { label: 'عقارات', icon: '🏠' },
+      services: { label: 'خدمات', icon: '🛠️' },
+      electronics: { label: 'إلكترونيات', icon: '📱' },
+      home: { label: 'منزل وأثاث', icon: '🛋️' },
+      other: { label: 'أخرى', icon: '📦' },
+    },
+  },
+}
+
+// تطبيع قيمة نوع المتجر القادمة من قاعدة البيانات إلى مفتاح ثيم
+function resolveThemeKey(raw) {
+  const v = (raw || '').toString().trim().toLowerCase()
+  if (['fashion', 'clothes', 'clothing', 'ملابس', 'أزياء', 'ازياء'].includes(v)) return 'fashion'
+  if (['realestate', 'real_estate', 'عقارات', 'عقار'].includes(v)) return 'realestate'
+  if (['services', 'service', 'خدمات', 'خدمة'].includes(v)) return 'services'
+  if (['electronics', 'إلكترونيات', 'الكترونيات'].includes(v)) return 'electronics'
+  return 'general'
+}
+
+// ================= أدوات مساعدة =================
 function formatIQD(n) {
   if (n === null || n === undefined || isNaN(n)) return ''
   return Number(n).toLocaleString('en-US') + ' د.ع'
@@ -59,20 +182,28 @@ function parseVariants(product) {
   return v && typeof v === 'object' ? v : null
 }
 
-function waLink(product, intent) {
+function waLink(product, intent, themeLabels) {
   const phone = (product.contact_phone || '').replace(/[^0-9]/g, '')
   if (!phone) return null
   const name = product.name || product.title || ''
   const sku = product.sku ? `\nكود المنتج: ${product.sku}` : ''
   const text =
     intent === 'order'
-      ? `مرحباً 👋 أريد طلب هذا المنتج:\n${name}${sku}`
-      : `مرحباً 👋 أريد الاستفسار عن سعر هذا المنتج:\n${name}${sku}`
+      ? `مرحباً 👋 أريد طلب:\n${name}${sku}`
+      : `مرحباً 👋 أريد الاستفسار عن السعر:\n${name}${sku}`
   return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
 }
 
-// ============ المكوّن الرئيسي ============
+const WaIcon = () => (
+  <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" style={{ verticalAlign: '-3px', marginLeft: 6 }}>
+    <path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm5.4 14.1c-.2.6-1.2 1.2-1.7 1.2-.4.1-1 .1-1.6-.1-.4-.1-.9-.3-1.5-.6-2.6-1.1-4.3-3.8-4.4-4-.1-.2-1.1-1.4-1.1-2.7 0-1.3.7-1.9.9-2.2.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5.2.6.8 1.9.8 2 .1.1.1.3 0 .5-.1.2-.1.3-.3.5l-.4.5c-.1.1-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.4 2.4 1.5.3.1.5.1.6-.1.2-.2.7-.8.9-1.1.2-.3.4-.2.6-.1.3.1 1.6.8 1.9.9.3.2.5.2.5.4.1.1.1.7-.1 1.3Z"/>
+  </svg>
+)
+
+// ================= المكوّن الرئيسي =================
 export default function StoreFront() {
+  const { slug } = useParams()
+  const [store, setStore] = useState(null)
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -83,24 +214,70 @@ export default function StoreFront() {
   const [imgIndex, setImgIndex] = useState(0)
   const gridRef = useRef(null)
 
-  useEffect(() => { fetchProducts() }, [])
+  useEffect(() => { loadAll() }, [slug])
 
-  async function fetchProducts() {
+  async function loadAll() {
     setLoading(true)
     setError(null)
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .eq('is_active', true)
-      .order('created_at', { ascending: false })
+
+    // 1) جلب بيانات المتجر حسب الـ slug من الرابط
+    let storeRow = null
+    if (slug) {
+      const bySlug = await supabase.from('stores').select('*').eq('slug', slug).maybeSingle()
+      if (bySlug.data) storeRow = bySlug.data
+      if (!storeRow) {
+        const byName = await supabase.from('stores').select('*').eq('name', slug).maybeSingle()
+        if (byName.data) storeRow = byName.data
+      }
+    }
+    setStore(storeRow)
+
+    // 2) جلب المنتجات — منتجات هذا المتجر فقط إن أمكن ربطها
+    let query = supabase.from('products').select('*').eq('is_active', true)
+    if (storeRow) {
+      const ownerIds = [storeRow.id, storeRow.user_id, storeRow.owner_id].filter(Boolean)
+      // نجرب الربط عبر store_id أولاً ثم seller_id ثم user_id
+      // (أول عمود موجود فعلاً هو اللي ينطبق — الباقي يتجاهله Supabase بالفلترة المتعددة)
+      if (storeRow.id) query = query.or(
+        `store_id.eq.${storeRow.id},seller_id.eq.${storeRow.user_id || storeRow.id},user_id.eq.${storeRow.user_id || storeRow.id}`
+      )
+    }
+    const { data, error } = await query.order('created_at', { ascending: false })
+
     if (error) {
-      console.error('fetch products error:', error)
-      setError('تعذر تحميل المنتجات، حاولي تحديث الصفحة')
+      // لو فشل الربط (عمود غير موجود) نرجع لكل المنتجات الفعالة
+      const fallback = await supabase
+        .from('products').select('*').eq('is_active', true)
+        .order('created_at', { ascending: false })
+      if (fallback.error) {
+        console.error(fallback.error)
+        setError('تعذر تحميل المنتجات، حاول تحديث الصفحة')
+      } else {
+        setProducts(fallback.data || [])
+      }
     } else {
       setProducts(data || [])
     }
     setLoading(false)
   }
+
+  // ===== الثيم حسب نوع المتجر =====
+  const themeKey = resolveThemeKey(store?.store_type || store?.type || store?.category)
+  const T = THEMES[themeKey]
+
+  const storeName =
+    store?.name || store?.store_name || (slug ? decodeURIComponent(slug) : 'المتجر')
+
+  // ===== الفئات: تُبنى فقط من الفئات الموجودة فعلاً بمنتجات هذا المتجر =====
+  const cats = useMemo(() => {
+    const present = [...new Set(products.map((p) => p.category).filter(Boolean))]
+    const list = present.map((id) => ({
+      id,
+      label: T.catLabels[id]?.label || id,
+      icon: T.catLabels[id]?.icon || '📦',
+    }))
+    return [{ id: 'all', label: 'الكل', icon: '✨' }, ...list]
+  }, [products, themeKey])
 
   const filtered = useMemo(() => {
     return products.filter((p) => {
@@ -115,152 +292,119 @@ export default function StoreFront() {
     })
   }, [products, search, category])
 
-  function openProduct(p) {
-    setSelected(p)
-    setImgIndex(0)
-  }
-
-  function scrollToProducts() {
-    gridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
+  function openProduct(p) { setSelected(p); setImgIndex(0) }
+  function scrollToProducts() { gridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 
   return (
-    <div dir="rtl" style={s.page}>
+    <div dir="rtl" className="sf-page" style={{
+      '--primary': T.primary,
+      '--accent': T.accent,
+      '--accent-text': T.accentText,
+      '--soft': T.soft,
+      '--announce': T.announceBg,
+      '--aspect': T.aspect,
+    }}>
+      <style>{CSS}</style>
 
-      {/* ===== شريط التنقل العلوي ===== */}
-      <nav style={s.nav}>
-        <div style={s.navSide}>
-          <button style={s.navIconBtn} aria-label="القائمة">☰</button>
+      {/* ===== الشريط العلوي ===== */}
+      <nav className="sf-nav">
+        <button className="sf-icon-btn" aria-label="القائمة">☰</button>
+        <div className="sf-logo">
+          <div className="sf-logo-name">{storeName}</div>
+          <div className="sf-logo-tag">{T.tagline}</div>
         </div>
-        <div style={s.navCenter}>
-          <div style={s.logoEn}>{STORE_NAME_EN}</div>
-          <div style={s.logoAr}>{STORE_NAME_AR}</div>
-        </div>
-        <div style={{ ...s.navSide, justifyContent: 'flex-end', gap: 14 }}>
-          <button
-            style={s.navIconBtn}
-            aria-label="بحث"
-            onClick={() => setShowSearch(!showSearch)}
-          >🔍</button>
-          <button style={s.navIconBtn} aria-label="السلة" onClick={scrollToProducts}>🛍️</button>
+        <div className="sf-nav-icons">
+          <button className="sf-icon-btn" aria-label="بحث" onClick={() => setShowSearch(!showSearch)}>🔍</button>
+          <button className="sf-icon-btn" aria-label="السلة" onClick={scrollToProducts}>🛍️</button>
         </div>
       </nav>
 
       {/* ===== شريط الإعلان ===== */}
-      <div style={s.announce}>{ANNOUNCEMENT}</div>
+      <div className="sf-announce">{T.announce}</div>
 
-      {/* ===== حقل البحث (ينفتح من أيقونة 🔍) ===== */}
+      {/* ===== البحث ===== */}
       {showSearch && (
-        <div style={s.searchWrap}>
+        <div className="sf-search-wrap">
           <input
             autoFocus
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="ابحثي بالاسم أو رقم SKU..."
-            style={s.searchInput}
+            placeholder="ابحث بالاسم أو رقم SKU..."
+            className="sf-search"
           />
         </div>
       )}
 
-      {/* ===== قسم الهيرو ===== */}
-      <section style={{
-        ...s.hero,
-        backgroundImage: HERO_IMAGE
-          ? `linear-gradient(rgba(10,29,55,0.25), rgba(10,29,55,0.45)), url(${HERO_IMAGE})`
-          : `linear-gradient(135deg, ${NAVY} 0%, #14325c 55%, #1d477e 100%)`,
-      }}>
-        <div style={s.heroCard}>
-          <div style={s.heroKicker}>وصلنا حديثاً ✨</div>
-          <h1 style={s.heroTitle}>أرقى الفساتين والأزياء لهذا الموسم</h1>
-          <button style={s.heroBtn} onClick={scrollToProducts}>تسوقي الآن</button>
+      {/* ===== الهيرو ===== */}
+      <section className="sf-hero">
+        <div className="sf-hero-inner">
+          <div className="sf-hero-kicker">{T.heroKicker}</div>
+          <h1 className="sf-hero-title">{T.heroTitle}</h1>
+          <button className="sf-hero-cta" onClick={scrollToProducts}>{T.heroCta}</button>
         </div>
       </section>
 
-      {/* ===== الفئات الدائرية ===== */}
-      <div style={s.catRow}>
-        {CATEGORIES.map((c) => {
-          const active = category === c.id
-          return (
-            <button key={c.id} onClick={() => setCategory(c.id)} style={s.catItem}>
-              <span style={{
-                ...s.catCircle,
-                borderColor: active ? GOLD : '#e8dcc3',
-                background: active ? '#fff8e8' : '#fff',
-                boxShadow: active ? `0 0 0 2px ${GOLD}` : '0 1px 4px rgba(10,29,55,0.08)',
-              }}>{c.icon}</span>
-              <span style={{
-                ...s.catLabel,
-                color: active ? NAVY : '#5b6b80',
-                fontWeight: active ? 800 : 500,
-              }}>{c.label}</span>
+      {/* ===== الفئات (فقط الموجودة فعلاً بهذا المتجر) ===== */}
+      {cats.length > 1 && (
+        <div className="sf-cats">
+          {cats.map((c) => (
+            <button
+              key={c.id}
+              onClick={() => setCategory(c.id)}
+              className={`sf-cat ${category === c.id ? 'active' : ''}`}
+            >
+              <span className="sf-cat-circle">{c.icon}</span>
+              <span className="sf-cat-label">{c.label}</span>
             </button>
-          )
-        })}
-      </div>
+          ))}
+        </div>
+      )}
 
-      {/* ===== شبكة المنتجات ===== */}
-      <main ref={gridRef} style={s.main}>
-        {loading && <div style={s.stateBox}>⏳ جاري تحميل المنتجات...</div>}
+      {/* ===== المنتجات ===== */}
+      <main ref={gridRef} className="sf-main">
+        {loading && <div className="sf-state">⏳ جاري التحميل...</div>}
 
         {error && (
-          <div style={{ ...s.stateBox, color: '#dc2626' }}>
-            {error}
-            <br />
-            <button onClick={fetchProducts} style={s.retryBtn}>إعادة المحاولة</button>
+          <div className="sf-state" style={{ color: '#dc2626' }}>
+            {error}<br />
+            <button onClick={loadAll} className="sf-retry">إعادة المحاولة</button>
           </div>
         )}
 
         {!loading && !error && filtered.length === 0 && (
-          <div style={s.stateBox}>
-            📦 لا توجد منتجات في هذه الفئة حالياً
-          </div>
+          <div className="sf-state">📦 {T.emptyMsg}</div>
         )}
 
-        <div style={s.grid}>
+        <div className="sf-grid">
           {filtered.map((p) => {
             const imgs = parseImages(p)
             const hidden = p.hide_price
-            const waInquire = waLink(p, 'inquire')
-            const waOrder = waLink(p, 'order')
+            const waInq = waLink(p, 'inquire', T)
+            const waOrd = waLink(p, 'order', T)
             return (
-              <div key={p.id} style={s.card}>
-                <div style={s.cardImgBox} onClick={() => openProduct(p)}>
-                  {imgs[0] ? (
-                    <img src={imgs[0]} alt={p.name || ''} style={s.cardImg} loading="lazy" />
-                  ) : (
-                    <div style={s.noImg}>🖼️</div>
-                  )}
-                  {hidden && <span style={s.premiumBadge}>Premium ✦</span>}
+              <div key={p.id} className="sf-card">
+                <div className="sf-card-img" onClick={() => openProduct(p)}>
+                  {imgs[0]
+                    ? <img src={imgs[0]} alt={p.name || ''} loading="lazy" />
+                    : <div className="sf-noimg">🖼️</div>}
+                  {hidden && <span className="sf-badge">Premium ✦</span>}
                 </div>
-                <div style={s.cardBody}>
-                  <div style={s.cardName} onClick={() => openProduct(p)}>
+                <div className="sf-card-body">
+                  <div className="sf-card-name" onClick={() => openProduct(p)}>
                     {p.name || p.title || 'منتج'}
-                    {p.sku && <span style={s.cardSku}> | كود: {p.sku}</span>}
+                    {p.sku && <span className="sf-card-sku"> | {p.sku}</span>}
                   </div>
-
                   {hidden ? (
-                    // ===== بطاقة السعر الخاص (واتساب) =====
-                    waInquire ? (
-                      <a href={waInquire} target="_blank" rel="noopener noreferrer" style={s.waBtn}>
-                        <span style={s.waLogo}>✆</span> استفسر عن السعر
-                      </a>
-                    ) : (
-                      <span style={s.askPrice}>اسألي عن السعر</span>
-                    )
+                    waInq
+                      ? <a href={waInq} target="_blank" rel="noopener noreferrer" className="sf-wa-btn"><WaIcon />{T.inquireLabel}</a>
+                      : <span className="sf-ask">اسأل عن السعر</span>
                   ) : (
-                    // ===== بطاقة السعر العلني =====
                     <>
-                      <div style={s.price}>{displayPrice(p)}</div>
-                      {waOrder ? (
-                        <a href={waOrder} target="_blank" rel="noopener noreferrer" style={s.cartBtn}>
-                          إضافة إلى السلة
-                        </a>
-                      ) : (
-                        <button style={s.cartBtn} onClick={() => openProduct(p)}>
-                          عرض المنتج
-                        </button>
-                      )}
+                      <div className="sf-price">{displayPrice(p)}</div>
+                      {waOrd
+                        ? <a href={waOrd} target="_blank" rel="noopener noreferrer" className="sf-buy-btn">{T.buyLabel}</a>
+                        : <button className="sf-buy-btn" onClick={() => openProduct(p)}>{T.buyLabel}</button>}
                     </>
                   )}
                 </div>
@@ -270,35 +414,27 @@ export default function StoreFront() {
         </div>
       </main>
 
-      {/* ===== نافذة تفاصيل المنتج ===== */}
+      {/* ===== نافذة التفاصيل ===== */}
       {selected && (
-        <div style={s.overlay} onClick={() => setSelected(null)}>
-          <div style={s.modal} onClick={(e) => e.stopPropagation()}>
-            <button style={s.closeBtn} onClick={() => setSelected(null)}>✕</button>
-
+        <div className="sf-overlay" onClick={() => setSelected(null)}>
+          <div className="sf-modal" onClick={(e) => e.stopPropagation()}>
+            <button className="sf-close" onClick={() => setSelected(null)}>✕</button>
             {(() => {
               const imgs = parseImages(selected)
               return (
                 <div>
-                  <div style={s.modalImgBox}>
-                    {imgs.length > 0 ? (
-                      <img src={imgs[imgIndex]} alt="" style={s.modalImg} />
-                    ) : (
-                      <div style={s.noImg}>🖼️</div>
-                    )}
+                  <div className="sf-modal-img">
+                    {imgs.length > 0
+                      ? <img src={imgs[imgIndex]} alt="" />
+                      : <div className="sf-noimg">🖼️</div>}
                   </div>
                   {imgs.length > 1 && (
-                    <div style={s.thumbRow}>
+                    <div className="sf-thumbs">
                       {imgs.map((im, i) => (
                         <img
-                          key={i}
-                          src={im}
-                          alt=""
+                          key={i} src={im} alt=""
                           onClick={() => setImgIndex(i)}
-                          style={{
-                            ...s.thumb,
-                            border: i === imgIndex ? `2px solid ${GOLD}` : '2px solid transparent',
-                          }}
+                          className={i === imgIndex ? 'active' : ''}
                         />
                       ))}
                     </div>
@@ -306,414 +442,324 @@ export default function StoreFront() {
                 </div>
               )
             })()}
-
-            <div style={{ padding: '6px 18px 20px' }}>
-              <div style={s.modalTitle}>{selected.name || selected.title}</div>
-              {selected.sku && <div style={s.modalSku}>كود المنتج: #{selected.sku}</div>}
-
+            <div className="sf-modal-body">
+              <div className="sf-modal-title">{selected.name || selected.title}</div>
+              {selected.sku && <div className="sf-modal-sku">كود المنتج: #{selected.sku}</div>}
               {!selected.hide_price && (
-                <div style={{ ...s.price, fontSize: 22, margin: '10px 0' }}>
-                  {displayPrice(selected)}
-                </div>
+                <div className="sf-price sf-price-lg">{displayPrice(selected)}</div>
               )}
-
-              {selected.description && <p style={s.desc}>{selected.description}</p>}
-
+              {selected.description && <p className="sf-desc">{selected.description}</p>}
               {(() => {
                 const v = parseVariants(selected)
                 if (!v) return null
                 return (
                   <div style={{ marginTop: 10 }}>
                     {Array.isArray(v.sizes) && v.sizes.length > 0 && (
-                      <div style={s.variantRow}>
-                        <span style={s.variantLabel}>المقاسات:</span>
-                        {v.sizes.map((x, i) => <span key={i} style={s.chip}>{x}</span>)}
+                      <div className="sf-variant-row">
+                        <span className="sf-variant-label">المقاسات:</span>
+                        {v.sizes.map((x, i) => <span key={i} className="sf-chip">{x}</span>)}
                       </div>
                     )}
                     {Array.isArray(v.colors) && v.colors.length > 0 && (
-                      <div style={s.variantRow}>
-                        <span style={s.variantLabel}>الألوان:</span>
-                        {v.colors.map((x, i) => <span key={i} style={s.chip}>{x}</span>)}
+                      <div className="sf-variant-row">
+                        <span className="sf-variant-label">الألوان:</span>
+                        {v.colors.map((x, i) => <span key={i} className="sf-chip">{x}</span>)}
                       </div>
                     )}
                   </div>
                 )
               })()}
-
-              {waLink(selected, selected.hide_price ? 'inquire' : 'order') && (
+              {waLink(selected, selected.hide_price ? 'inquire' : 'order', T) && (
                 <a
-                  href={waLink(selected, selected.hide_price ? 'inquire' : 'order')}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ ...s.waBtn, display: 'block', textAlign: 'center', marginTop: 16, padding: '14px' }}
-                >
-                  <span style={s.waLogo}>✆</span> تواصلي مع البائع عبر واتساب
-                </a>
+                  href={waLink(selected, selected.hide_price ? 'inquire' : 'order', T)}
+                  target="_blank" rel="noopener noreferrer"
+                  className="sf-wa-btn sf-wa-lg"
+                ><WaIcon /> تواصل مع البائع عبر واتساب</a>
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* ===== شريط التنقل السفلي ===== */}
-      <footer style={s.bottomNav}>
-        <button style={s.bnItem} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
-          <span style={s.bnIcon}>🏠</span><span style={s.bnLabel}>الرئيسية</span>
-        </button>
-        <button style={s.bnItem} onClick={scrollToProducts}>
-          <span style={s.bnIcon}>👗</span><span style={s.bnLabel}>المجموعات</span>
-        </button>
-        <button style={s.bnItem} onClick={() => { setShowSearch(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>
-          <span style={s.bnIcon}>🔍</span><span style={s.bnLabel}>بحث</span>
-        </button>
-        <button style={s.bnItem} onClick={scrollToProducts}>
-          <span style={s.bnIcon}>🛍️</span><span style={s.bnLabel}>السلة</span>
-        </button>
-        <button style={s.bnItem} onClick={scrollToProducts}>
-          <span style={s.bnIcon}>💬</span><span style={s.bnLabel}>الدعم</span>
-        </button>
+      {/* ===== التنقل السفلي (موبايل فقط) ===== */}
+      <footer className="sf-bottom-nav">
+        <button onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}><span>🏠</span>الرئيسية</button>
+        <button onClick={scrollToProducts}><span>🗂️</span>المجموعات</button>
+        <button onClick={() => { setShowSearch(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }}><span>🔍</span>بحث</button>
+        <button onClick={scrollToProducts}><span>🛍️</span>السلة</button>
+        <button onClick={scrollToProducts}><span>💬</span>الدعم</button>
       </footer>
     </div>
   )
 }
 
-// ============ التنسيقات ============
-const s = {
-  page: {
-    minHeight: '100vh',
-    background: '#fdfdfb',
-    fontFamily: "'Tajawal', sans-serif",
-    paddingBottom: 90,
-  },
-
-  // --- شريط التنقل ---
-  nav: {
-    background: NAVY,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '12px 16px',
-    position: 'sticky',
-    top: 0,
-    zIndex: 50,
-  },
-  navSide: { display: 'flex', alignItems: 'center', flex: 1 },
-  navCenter: { textAlign: 'center', flex: 2 },
-  logoEn: {
-    color: GOLD,
-    fontSize: 19,
-    fontWeight: 800,
-    letterSpacing: 3,
-  },
-  logoAr: { color: '#cbd5e1', fontSize: 12, marginTop: 1 },
-  navIconBtn: {
-    background: 'none',
-    border: 'none',
-    color: '#fff',
-    fontSize: 20,
-    cursor: 'pointer',
-    padding: 4,
-  },
-
-  // --- شريط الإعلان ---
-  announce: {
-    background: LIGHTBLUE,
-    color: '#fff',
-    textAlign: 'center',
-    fontSize: 12.5,
-    padding: '7px 12px',
-    letterSpacing: 0.3,
-  },
-
-  // --- البحث ---
-  searchWrap: { padding: '12px 16px 0', maxWidth: 1100, margin: '0 auto' },
-  searchInput: {
-    width: '100%',
-    padding: '12px 16px',
-    borderRadius: 12,
-    border: `1.5px solid ${GOLD}`,
-    fontSize: 15,
-    outline: 'none',
-    fontFamily: 'inherit',
-    boxSizing: 'border-box',
-    background: '#fff',
-  },
-
-  // --- الهيرو ---
-  hero: {
-    minHeight: 300,
-    backgroundSize: 'cover',
-    backgroundPosition: 'center top',
-    display: 'flex',
-    alignItems: 'flex-end',
-    justifyContent: 'center',
-    padding: '40px 20px 28px',
-  },
-  heroCard: {
-    background: 'rgba(255,255,255,0.96)',
-    borderRadius: 18,
-    padding: '20px 26px',
-    textAlign: 'center',
-    maxWidth: 420,
-    width: '100%',
-    boxShadow: '0 8px 30px rgba(10,29,55,0.25)',
-  },
-  heroKicker: { color: '#b8860b', fontSize: 13, fontWeight: 700, letterSpacing: 0.5 },
-  heroTitle: {
-    color: NAVY,
-    fontSize: 21,
-    fontWeight: 800,
-    margin: '8px 0 16px',
-    lineHeight: 1.5,
-  },
-  heroBtn: {
-    background: LIGHTBLUE,
-    color: '#fff',
-    border: 'none',
-    borderRadius: 12,
-    padding: '12px 38px',
-    fontSize: 16,
-    fontWeight: 800,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-
-  // --- الفئات الدائرية ---
-  catRow: {
-    display: 'flex',
-    gap: 14,
-    overflowX: 'auto',
-    WebkitOverflowScrolling: 'touch',
-    padding: '18px 16px 6px',
-    maxWidth: 1100,
-    margin: '0 auto',
-  },
-  catItem: {
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 6,
-    fontFamily: 'inherit',
-    flexShrink: 0,
-    padding: 0,
-  },
-  catCircle: {
-    width: 62,
-    height: 62,
-    borderRadius: '50%',
-    border: '2px solid',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: 26,
-    transition: 'all 0.15s',
-  },
-  catLabel: { fontSize: 12 },
-
-  // --- المحتوى ---
-  main: { maxWidth: 1100, margin: '14px auto 0', padding: '0 16px', scrollMarginTop: 70 },
-  stateBox: { textAlign: 'center', padding: '50px 20px', color: '#64748b', fontSize: 16 },
-  retryBtn: {
-    marginTop: 12,
-    padding: '10px 24px',
-    borderRadius: 10,
-    border: 'none',
-    background: GOLD,
-    color: NAVY,
-    fontSize: 14,
-    fontWeight: 800,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-  },
-
-  // --- الشبكة (عمودين على الموبايل) ---
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(158px, 1fr))',
-    gap: 14,
-  },
-  card: {
-    background: '#fff',
-    borderRadius: 16,
-    overflow: 'hidden',
-    boxShadow: '0 2px 8px rgba(10,29,55,0.07)',
-    display: 'flex',
-    flexDirection: 'column',
-  },
-  cardImgBox: {
-    position: 'relative',
-    aspectRatio: '3 / 4',
-    background: '#f4f2ee',
-    cursor: 'pointer',
-  },
-  cardImg: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
-  noImg: {
-    width: '100%',
-    height: '100%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    fontSize: 40,
-    color: '#cbd5e1',
-    minHeight: 160,
-  },
-  premiumBadge: {
-    position: 'absolute',
-    top: 10,
-    right: 10,
-    background: NAVY,
-    color: GOLD,
-    fontSize: 10.5,
-    fontWeight: 800,
-    padding: '4px 10px',
-    borderRadius: 999,
-    letterSpacing: 0.5,
-  },
-  cardBody: {
-    padding: '10px 12px 14px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
-    flex: 1,
-  },
-  cardName: {
-    fontSize: 13.5,
-    fontWeight: 700,
-    color: NAVY,
-    lineHeight: 1.5,
-    cursor: 'pointer',
-    overflow: 'hidden',
-    display: '-webkit-box',
-    WebkitLineClamp: 2,
-    WebkitBoxOrient: 'vertical',
-  },
-  cardSku: { color: '#8a97a8', fontWeight: 500, fontSize: 12 },
-  price: { color: NAVY, fontWeight: 800, fontSize: 16.5 },
-
-  // --- زر السلة الذهبي ---
-  cartBtn: {
-    display: 'block',
-    width: '100%',
-    background: GOLD,
-    color: '#111',
-    border: 'none',
-    borderRadius: 10,
-    padding: '10px 8px',
-    fontSize: 13.5,
-    fontWeight: 800,
-    cursor: 'pointer',
-    textAlign: 'center',
-    textDecoration: 'none',
-    fontFamily: 'inherit',
-    marginTop: 'auto',
-    boxSizing: 'border-box',
-  },
-
-  // --- زر واتساب الأخضر ---
-  waBtn: {
-    display: 'block',
-    width: '100%',
-    background: WA_GREEN,
-    color: '#fff',
-    borderRadius: 10,
-    padding: '10px 8px',
-    fontSize: 13.5,
-    fontWeight: 800,
-    textDecoration: 'none',
-    textAlign: 'center',
-    marginTop: 'auto',
-    boxSizing: 'border-box',
-  },
-  waLogo: { fontSize: 15, marginLeft: 5 },
-  askPrice: { color: '#64748b', fontSize: 13 },
-
-  // --- نافذة التفاصيل ---
-  overlay: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(10,29,55,0.6)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 100,
-    padding: 16,
-  },
-  modal: {
-    background: '#fff',
-    borderRadius: 20,
-    width: '100%',
-    maxWidth: 460,
-    maxHeight: '92vh',
-    overflowY: 'auto',
-    position: 'relative',
-  },
-  closeBtn: {
-    position: 'absolute',
-    top: 10,
-    left: 10,
-    zIndex: 2,
-    width: 34,
-    height: 34,
-    borderRadius: '50%',
-    border: 'none',
-    background: 'rgba(10,29,55,0.7)',
-    color: '#fff',
-    fontSize: 16,
-    cursor: 'pointer',
-  },
-  modalImgBox: { width: '100%', aspectRatio: '3 / 4', background: '#f4f2ee' },
-  modalImg: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
-  thumbRow: { display: 'flex', gap: 8, padding: '10px 18px 0', overflowX: 'auto' },
-  thumb: {
-    width: 56,
-    height: 56,
-    objectFit: 'cover',
-    borderRadius: 10,
-    cursor: 'pointer',
-    flexShrink: 0,
-  },
-  modalTitle: { fontSize: 19, fontWeight: 800, color: NAVY, marginTop: 12 },
-  modalSku: { fontSize: 13, color: '#64748b', marginTop: 4 },
-  desc: { fontSize: 14, color: '#334155', lineHeight: 1.7, marginTop: 10, whiteSpace: 'pre-wrap' },
-  variantRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 },
-  variantLabel: { fontSize: 13, color: '#64748b', fontWeight: 700 },
-  chip: {
-    background: '#fff8e8',
-    border: `1px solid ${GOLD}`,
-    borderRadius: 999,
-    padding: '4px 12px',
-    fontSize: 13,
-    color: NAVY,
-    fontWeight: 700,
-  },
-
-  // --- شريط التنقل السفلي ---
-  bottomNav: {
-    position: 'fixed',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    background: NAVY,
-    display: 'flex',
-    justifyContent: 'space-around',
-    padding: '8px 4px 10px',
-    zIndex: 60,
-    boxShadow: '0 -3px 12px rgba(10,29,55,0.3)',
-  },
-  bnItem: {
-    background: 'none',
-    border: 'none',
-    cursor: 'pointer',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: 3,
-    fontFamily: 'inherit',
-    padding: '2px 8px',
-  },
-  bnIcon: { fontSize: 19 },
-  bnLabel: { color: GOLD, fontSize: 10.5, fontWeight: 700 },
+// ================= التنسيقات (CSS حقيقي مع استجابة كاملة) =================
+const CSS = `
+.sf-page {
+  min-height: 100vh;
+  background: #fdfdfb;
+  font-family: 'Tajawal', sans-serif;
+  padding-bottom: 86px;
 }
+
+/* ---- الشريط العلوي ---- */
+.sf-nav {
+  background: var(--primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+.sf-logo { text-align: center; }
+.sf-logo-name {
+  color: var(--accent);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+.sf-logo-tag { color: #cbd5e1; font-size: 12px; margin-top: 1px; }
+.sf-nav-icons { display: flex; gap: 12px; }
+.sf-icon-btn {
+  background: none; border: none; color: #fff;
+  font-size: 20px; cursor: pointer; padding: 4px;
+}
+
+/* ---- شريط الإعلان ---- */
+.sf-announce {
+  background: var(--announce);
+  color: #fff;
+  text-align: center;
+  font-size: 12.5px;
+  padding: 7px 12px;
+}
+
+/* ---- البحث ---- */
+.sf-search-wrap { padding: 12px 16px 0; max-width: 1100px; margin: 0 auto; }
+.sf-search {
+  width: 100%;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1.5px solid var(--accent);
+  font-size: 15px;
+  outline: none;
+  font-family: inherit;
+  box-sizing: border-box;
+  background: #fff;
+}
+
+/* ---- الهيرو ---- */
+.sf-hero {
+  background:
+    radial-gradient(ellipse at 80% 20%, rgba(255,255,255,0.10), transparent 55%),
+    radial-gradient(ellipse at 15% 85%, rgba(255,255,255,0.07), transparent 50%),
+    linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 60%, #3a5a8c));
+  padding: 54px 20px;
+  display: flex;
+  justify-content: center;
+}
+.sf-hero-inner { text-align: center; max-width: 620px; }
+.sf-hero-kicker {
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+.sf-hero-title {
+  color: #ffffff;
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1.55;
+  margin: 10px 0 20px;
+}
+.sf-hero-cta {
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  border-radius: 12px;
+  padding: 13px 42px;
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform .15s, box-shadow .15s;
+}
+.sf-hero-cta:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,.25); }
+
+/* ---- الفئات ---- */
+.sf-cats {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 20px 16px 6px;
+  max-width: 1100px;
+  margin: 0 auto;
+  justify-content: flex-start;
+}
+.sf-cat {
+  background: none; border: none; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  font-family: inherit; flex-shrink: 0; padding: 0;
+}
+.sf-cat-circle {
+  width: 64px; height: 64px; border-radius: 50%;
+  border: 2px solid #e6e2d8; background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 26px;
+  box-shadow: 0 1px 5px rgba(0,0,0,.07);
+  transition: all .15s;
+}
+.sf-cat:hover .sf-cat-circle { transform: translateY(-2px); }
+.sf-cat.active .sf-cat-circle {
+  border-color: var(--accent);
+  background: var(--soft);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.sf-cat-label { font-size: 12px; color: #5b6b80; }
+.sf-cat.active .sf-cat-label { color: var(--primary); font-weight: 800; }
+
+/* ---- الشبكة ---- */
+.sf-main { max-width: 1100px; margin: 16px auto 0; padding: 0 16px; scroll-margin-top: 70px; }
+.sf-state { text-align: center; padding: 50px 20px; color: #64748b; font-size: 16px; }
+.sf-retry {
+  margin-top: 12px; padding: 10px 24px; border-radius: 10px; border: none;
+  background: var(--accent); color: var(--accent-text);
+  font-size: 14px; font-weight: 800; cursor: pointer; font-family: inherit;
+}
+.sf-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+@media (min-width: 700px)  { .sf-grid { grid-template-columns: repeat(3, 1fr); gap: 18px; } }
+@media (min-width: 1000px) { .sf-grid { grid-template-columns: repeat(4, 1fr); gap: 20px; } }
+
+.sf-card {
+  background: #fff;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0,0,0,.07);
+  display: flex; flex-direction: column;
+  transition: transform .15s, box-shadow .15s;
+}
+.sf-card:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(0,0,0,.12); }
+.sf-card-img {
+  position: relative;
+  aspect-ratio: var(--aspect);
+  background: #f4f2ee;
+  cursor: pointer;
+}
+.sf-card-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sf-noimg {
+  width: 100%; height: 100%; min-height: 150px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 40px; color: #cbd5e1;
+}
+.sf-badge {
+  position: absolute; top: 10px; right: 10px;
+  background: var(--primary); color: var(--accent);
+  font-size: 10.5px; font-weight: 800;
+  padding: 4px 10px; border-radius: 999px; letter-spacing: .5px;
+}
+.sf-card-body {
+  padding: 10px 12px 14px;
+  display: flex; flex-direction: column; gap: 8px; flex: 1;
+}
+.sf-card-name {
+  font-size: 13.5px; font-weight: 700; color: var(--primary);
+  line-height: 1.5; cursor: pointer;
+  overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.sf-card-sku { color: #8a97a8; font-weight: 500; font-size: 12px; }
+.sf-price { color: var(--primary); font-weight: 800; font-size: 16.5px; }
+.sf-price-lg { font-size: 22px; margin: 10px 0; }
+.sf-ask { color: #64748b; font-size: 13px; }
+
+.sf-buy-btn {
+  display: block; width: 100%; box-sizing: border-box;
+  background: var(--accent); color: var(--accent-text);
+  border: none; border-radius: 10px;
+  padding: 10px 8px; font-size: 13.5px; font-weight: 800;
+  cursor: pointer; text-align: center; text-decoration: none;
+  font-family: inherit; margin-top: auto;
+  transition: filter .15s;
+}
+.sf-buy-btn:hover { filter: brightness(1.07); }
+
+.sf-wa-btn {
+  display: block; width: 100%; box-sizing: border-box;
+  background: #25D366; color: #fff;
+  border-radius: 10px; padding: 10px 8px;
+  font-size: 13.5px; font-weight: 800;
+  text-decoration: none; text-align: center; margin-top: auto;
+  transition: filter .15s;
+}
+.sf-wa-btn:hover { filter: brightness(1.06); }
+.sf-wa-lg { margin-top: 16px; padding: 14px; }
+
+/* ---- النافذة ---- */
+.sf-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100; padding: 16px;
+}
+.sf-modal {
+  background: #fff; border-radius: 20px;
+  width: 100%; max-width: 460px; max-height: 92vh;
+  overflow-y: auto; position: relative;
+}
+.sf-close {
+  position: absolute; top: 10px; left: 10px; z-index: 2;
+  width: 34px; height: 34px; border-radius: 50%; border: none;
+  background: rgba(0,0,0,.55); color: #fff; font-size: 16px; cursor: pointer;
+}
+.sf-modal-img { width: 100%; aspect-ratio: var(--aspect); background: #f4f2ee; }
+.sf-modal-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sf-thumbs { display: flex; gap: 8px; padding: 10px 18px 0; overflow-x: auto; }
+.sf-thumbs img {
+  width: 56px; height: 56px; object-fit: cover; border-radius: 10px;
+  cursor: pointer; flex-shrink: 0; border: 2px solid transparent;
+}
+.sf-thumbs img.active { border-color: var(--accent); }
+.sf-modal-body { padding: 6px 18px 20px; }
+.sf-modal-title { font-size: 19px; font-weight: 800; color: var(--primary); margin-top: 12px; }
+.sf-modal-sku { font-size: 13px; color: #64748b; margin-top: 4px; }
+.sf-desc { font-size: 14px; color: #334155; line-height: 1.7; margin-top: 10px; white-space: pre-wrap; }
+.sf-variant-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.sf-variant-label { font-size: 13px; color: #64748b; font-weight: 700; }
+.sf-chip {
+  background: var(--soft); border: 1px solid var(--accent);
+  border-radius: 999px; padding: 4px 12px;
+  font-size: 13px; color: var(--primary); font-weight: 700;
+}
+
+/* ---- التنقل السفلي ---- */
+.sf-bottom-nav {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--primary);
+  display: flex; justify-content: space-around;
+  padding: 8px 4px 10px; z-index: 60;
+  box-shadow: 0 -3px 12px rgba(0,0,0,.3);
+}
+.sf-bottom-nav button {
+  background: none; border: none; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  font-family: inherit; padding: 2px 8px;
+  color: var(--accent); font-size: 10.5px; font-weight: 700;
+}
+.sf-bottom-nav button span { font-size: 19px; }
+
+/* ---- سطح المكتب ---- */
+@media (min-width: 900px) {
+  .sf-bottom-nav { display: none; }
+  .sf-page { padding-bottom: 40px; }
+  .sf-hero { padding: 80px 20px; }
+  .sf-hero-title { font-size: 34px; }
+  .sf-cats { justify-content: center; }
+}
+`

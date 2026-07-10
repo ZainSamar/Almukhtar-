@@ -1,1245 +1,704 @@
-import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { supabase } from "../lib/supabase";
+import { useState, useEffect, useMemo } from 'react'
+import { supabase } from '../lib/supabase.js'
 
-// ============================================================
-// CONSTANTS
-// ============================================================
-const LISTING_TYPES = [
-  { key: "product", icon: "🛍️", ar: "منتج", en: "Product" },
-  { key: "real_estate", icon: "🏠", ar: "عقار", en: "Real Estate" },
-  { key: "service", icon: "🛠️", ar: "خدمة", en: "Service" },
-];
+// ================================================================
+//  لوحة تحكم البائع — مربوطة بالمتجر ونوعه
+//  - الفئات تتغير تلقائياً حسب store_type (أزياء / عقارات / خدمات ...)
+//  - كل منتج يُحفظ مربوطاً بـ store_id + seller_id تلقائياً
+//  - Magic Toggle لإخفاء السعر وتحويله لواتساب
+//  - رفع صور متعددة مع ضغط تلقائي
+//  - SKU تلقائي حسب الفئة (CL-001 / SH-002 ...)
+// ================================================================
 
-const PRODUCT_CATEGORIES = [
-  { key: "clothes", ar: "👕 ملابس وأزياء" },
-  { key: "shoes", ar: "👟 أحذية" },
-  { key: "accessories", ar: "💍 إكسسوارات" },
-  { key: "beauty", ar: "💄 عطور وتجميل" },
-  { key: "food", ar: "🍔 مواد غذائية" },
-  { key: "electronics", ar: "📱 إلكترونيات" },
-  { key: "mobiles", ar: "📲 موبايلات" },
-  { key: "computers", ar: "💻 كمبيوترات" },
-  { key: "furniture", ar: "🪑 أثاث" },
-  { key: "home", ar: "🏠 أدوات منزلية" },
-  { key: "pharmacy", ar: "💊 صيدلية" },
-  { key: "books", ar: "📚 كتب وقرطاسية" },
-  { key: "wholesale", ar: "📦 جملة" },
-  { key: "handmade", ar: "🎨 حرف يدوية" },
-  { key: "restaurant", ar: "🍽️ مطاعم وكافيهات" },
-  { key: "other", ar: "📦 أخرى" },
-];
+// اسم الـ bucket في Supabase Storage — إذا فشل الرفع تُحفظ الصور بصيغة مضغوطة داخل قاعدة البيانات تلقائياً
+const STORAGE_BUCKET = 'product-images'
 
-const REAL_ESTATE_TYPES = [
-  { key: "house", ar: "بيت" },
-  { key: "apartment", ar: "شقة" },
-  { key: "shop", ar: "محل تجاري" },
-  { key: "land", ar: "أرض" },
-  { key: "warehouse", ar: "مخزن" },
-  { key: "office", ar: "مكتب" },
-  { key: "building", ar: "بناية" },
-];
+// الفئات المتاحة حسب نوع المتجر
+const CATS_BY_TYPE = {
+  fashion: [
+    { id: 'clothes', label: 'أزياء وملابس', icon: '👗', sku: 'CL' },
+    { id: 'shoes', label: 'أحذية', icon: '👠', sku: 'SH' },
+    { id: 'accessories', label: 'إكسسوارات', icon: '💍', sku: 'AC' },
+    { id: 'bags', label: 'حقائب', icon: '👜', sku: 'BG' },
+    { id: 'beauty', label: 'عناية وجمال', icon: '💄', sku: 'BE' },
+    { id: 'other', label: 'أخرى', icon: '📦', sku: 'OT' },
+  ],
+  realestate: [
+    { id: 'apartment', label: 'شقق', icon: '🏢', sku: 'AP' },
+    { id: 'house', label: 'بيوت', icon: '🏡', sku: 'HS' },
+    { id: 'land', label: 'أراضي', icon: '📐', sku: 'LN' },
+    { id: 'commercial', label: 'تجاري', icon: '🏬', sku: 'CM' },
+    { id: 'other', label: 'أخرى', icon: '📦', sku: 'OT' },
+  ],
+  services: [
+    { id: 'maintenance', label: 'صيانة', icon: '🔧', sku: 'MN' },
+    { id: 'cleaning', label: 'تنظيف', icon: '🧹', sku: 'CN' },
+    { id: 'transport', label: 'نقل', icon: '🚚', sku: 'TR' },
+    { id: 'design', label: 'تصميم', icon: '🎨', sku: 'DS' },
+    { id: 'other', label: 'أخرى', icon: '📦', sku: 'OT' },
+  ],
+  electronics: [
+    { id: 'phones', label: 'موبايلات', icon: '📱', sku: 'PH' },
+    { id: 'computers', label: 'كمبيوتر', icon: '💻', sku: 'PC' },
+    { id: 'audio', label: 'سماعات وصوتيات', icon: '🎧', sku: 'AU' },
+    { id: 'gaming', label: 'ألعاب', icon: '🎮', sku: 'GM' },
+    { id: 'other', label: 'أخرى', icon: '📦', sku: 'OT' },
+  ],
+  general: [
+    { id: 'clothes', label: 'ملابس', icon: '👗', sku: 'CL' },
+    { id: 'realestate', label: 'عقارات', icon: '🏠', sku: 'RE' },
+    { id: 'services', label: 'خدمات', icon: '🛠️', sku: 'SR' },
+    { id: 'electronics', label: 'إلكترونيات', icon: '📱', sku: 'EL' },
+    { id: 'home', label: 'منزل وأثاث', icon: '🛋️', sku: 'HM' },
+    { id: 'other', label: 'أخرى', icon: '📦', sku: 'OT' },
+  ],
+}
 
-const OWNERSHIP_TYPES = ["طابو صرف", "طابو مشاع", "صك قديم", "قولبة", "إيجار"];
+function resolveType(raw) {
+  const v = (raw || '').toString().trim().toLowerCase()
+  if (['fashion', 'clothes', 'clothing', 'ملابس', 'أزياء', 'ازياء'].includes(v)) return 'fashion'
+  if (['realestate', 'real_estate', 'عقارات', 'عقار'].includes(v)) return 'realestate'
+  if (['services', 'service', 'خدمات', 'خدمة'].includes(v)) return 'services'
+  if (['electronics', 'إلكترونيات', 'الكترونيات'].includes(v)) return 'electronics'
+  return 'general'
+}
 
-const IRAQI_CITIES = [
-  "بغداد", "البصرة", "الموصل", "أربيل", "النجف", "كربلاء", "كركوك",
-  "السليمانية", "ديالى", "الأنبار", "واسط", "بابل", "ذي قار",
-  "ميسان", "المثنى", "القادسية", "صلاح الدين", "دهوك", "حلبجة"
-];
+const SIZE_PRESETS = ['S', 'M', 'L', 'XL', 'XXL', '38', '40', '42']
+const COLOR_PRESETS = ['أسود', 'أبيض', 'أحمر', 'أزرق', 'أخضر', 'بيج', 'ذهبي', 'وردي']
 
-const STATUS_CONFIG = {
-  new: { ar: "جديد 🔔", color: "#2563eb", bg: "#eff6ff" },
-  processing: { ar: "جاري ⚡", color: "#d97706", bg: "#fffbeb" },
-  delivered: { ar: "تم ✅", color: "#16a34a", bg: "#f0fdf4" },
-  cancelled: { ar: "ملغي ❌", color: "#dc2626", bg: "#fef2f2" },
-};
-
-const SIZES_CLOTHES = ["XS", "S", "M", "L", "XL", "XXL", "XXXL"];
-const SIZES_SHOES = ["36", "37", "38", "39", "40", "41", "42", "43", "44", "45"];
-const COLORS_LIST = [
-  { name: "أسود", hex: "#000000" }, { name: "أبيض", hex: "#FFFFFF" },
-  { name: "أحمر", hex: "#EF4444" }, { name: "أزرق", hex: "#3B82F6" },
-  { name: "أخضر", hex: "#22C55E" }, { name: "أصفر", hex: "#EAB308" },
-  { name: "بنفسجي", hex: "#A855F7" }, { name: "بني", hex: "#92400E" },
-  { name: "رمادي", hex: "#6B7280" }, { name: "وردي", hex: "#EC4899" },
-  { name: "برتقالي", hex: "#F97316" }, { name: "بيج", hex: "#D4B896" },
-  { name: "ذهبي", hex: "#F59E0B" }, { name: "فضي", hex: "#9CA3AF" },
-];
-
-// ============================================================
-// IMAGE COMPRESSION UTILITY
-// ============================================================
-const compressImage = (file, maxSizeKB = 300) => {
-  return new Promise((resolve) => {
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    const img = new Image();
-    const reader = new FileReader();
+// ضغط صورة عبر canvas — الحد الأقصى 1000px وجودة 0.72
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
     reader.onload = (e) => {
+      const img = new Image()
       img.onload = () => {
-        let { width, height } = img;
-        const maxDim = 1200;
-        if (width > maxDim || height > maxDim) {
-          if (width > height) { height = (height / width) * maxDim; width = maxDim; }
-          else { width = (width / height) * maxDim; height = maxDim; }
+        const MAX = 1000
+        let { width, height } = img
+        if (width > MAX || height > MAX) {
+          const ratio = Math.min(MAX / width, MAX / height)
+          width = Math.round(width * ratio)
+          height = Math.round(height * ratio)
         }
-        canvas.width = width;
-        canvas.height = height;
-        ctx.drawImage(img, 0, 0, width, height);
-        let quality = 0.85;
-        const tryCompress = () => {
-          const result = canvas.toDataURL("image/jpeg", quality);
-          const sizeKB = (result.length * 0.75) / 1024;
-          if (sizeKB > maxSizeKB && quality > 0.3) { quality -= 0.1; tryCompress(); }
-          else resolve(result);
-        };
-        tryCompress();
-      };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-  });
-};
-
-// ============================================================
-// AUTO SKU GENERATOR
-// ============================================================
-const generateSKU = (category, existingCount = 0) => {
-  const prefixes = {
-    clothes: "CL", shoes: "SH", accessories: "AC", beauty: "BT",
-    food: "FD", electronics: "EL", mobiles: "MB", computers: "CP",
-    furniture: "FR", home: "HM", pharmacy: "PH", books: "BK",
-    wholesale: "WS", handmade: "HD", restaurant: "RS", other: "OT",
-    real_estate: "RE", service: "SV",
-  };
-  const prefix = prefixes[category] || "PR";
-  const num = String(existingCount + 1).padStart(3, "0");
-  return `${prefix}-${num}`;
-};
-
-// ============================================================
-// MAIN DASHBOARD
-// ============================================================
-export default function SellerDashboard() {
-  const [page, setPage] = useState("home");
-  const [lang, setLang] = useState("ar");
-  const [user, setUser] = useState(null);
-  const [store, setStore] = useState(null);
-  const [orders, setOrders] = useState([]);
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showAddListing, setShowAddListing] = useState(false);
-  const [selectedOrder, setSelectedOrder] = useState(null);
-  const [notification, setNotification] = useState(null);
-  const navigate = useNavigate();
-  const ar = lang === "ar";
-
-  useEffect(() => { loadData(); }, []);
-
-  const showNotif = (msg, type = "success") => {
-    setNotification({ msg, type });
-    setTimeout(() => setNotification(null), 3500);
-  };
-
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      if (!authUser) { navigate("/login"); return; }
-      const { data: userData } = await supabase.from("users").select("*").eq("id", authUser.id).single();
-      setUser(userData);
-      const { data: storeData } = await supabase.from("stores").select("*").eq("owner_id", authUser.id).single();
-      setStore(storeData);
-      if (storeData) {
-        const [ordersRes, productsRes] = await Promise.all([
-          supabase.from("orders").select("*").eq("store_id", storeData.id).order("created_at", { ascending: false }).limit(50),
-          supabase.from("products").select("*").eq("store_id", storeData.id).order("created_at", { ascending: false })
-        ]);
-        setOrders(ordersRes.data || []);
-        setProducts(productsRes.data || []);
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+        canvas.toBlob(
+          (blob) => (blob ? resolve(blob) : reject(new Error('compress failed'))),
+          'image/jpeg',
+          0.72
+        )
       }
-    } catch (err) { console.error(err); }
-    setLoading(false);
-  };
+      img.onerror = reject
+      img.src = e.target.result
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
 
-  const handleLogout = async () => { await supabase.auth.signOut(); navigate("/"); };
-  const storeName = store?.name_ar || "متجري";
-  const storeSlug = store?.store_slug || "";
-  const userName = user?.name || "";
-  const todayOrders = orders.filter(o => new Date(o.created_at).toDateString() === new Date().toDateString());
-  const totalSales = orders.filter(o => o.status === "delivered").reduce((s, o) => s + (o.total || 0), 0);
-  const newOrders = orders.filter(o => o.status === "new");
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result)
+    r.onerror = reject
+    r.readAsDataURL(blob)
+  })
+}
 
-  if (loading) return (
-    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#0f172a", gap: 16 }}>
-      <svg width="60" height="46" viewBox="0 0 120 44">
-        <polygon points="10,22 60,4 110,22" fill="none" stroke="#f0c040" strokeWidth="3"/>
-        <line x1="14" y1="22" x2="14" y2="36" stroke="#f0c040" strokeWidth="2.5"/>
-        <line x1="106" y1="22" x2="106" y2="36" stroke="#f0c040" strokeWidth="2.5"/>
-        <line x1="14" y1="36" x2="106" y2="36" stroke="#f0c040" strokeWidth="2.5"/>
-        <text x="60" y="30" textAnchor="middle" fill="white" fontSize="13" fontWeight="700" fontFamily="Inter">AL-MUKHTAR</text>
-      </svg>
-      <div style={{ color: "#64748b", fontFamily: "Tajawal,sans-serif" }}>جاري التحميل...</div>
-    </div>
-  );
+export default function SellerDashboard() {
+  const [user, setUser] = useState(null)
+  const [store, setStore] = useState(null)
+  const [products, setProducts] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState(null) // {type:'ok'|'err', text}
+
+  // ---- حقول النموذج ----
+  const empty = {
+    name: '', description: '', category: '',
+    price: '', currency: 'IQD', quantity: '1',
+    hide_price: false, contact_phone: '', video_url: '',
+    sizes: [], colors: [], images: [], // images: [{dataUrl, blob}] أو روابط نصية عند التعديل
+  }
+  const [f, setF] = useState(empty)
+
+  const storeType = resolveType(store?.store_type)
+  const CATS = CATS_BY_TYPE[storeType]
+  const isService = storeType === 'services'
+  const isRealestate = storeType === 'realestate'
+  const showVariants = storeType === 'fashion' || storeType === 'general'
+
+  useEffect(() => { init() }, [])
+
+  async function init() {
+    setLoading(true)
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { window.location.href = '/login'; return }
+    setUser(user)
+
+    const { data: storeRow } = await supabase
+      .from('stores').select('*').eq('owner_id', user.id).maybeSingle()
+    setStore(storeRow)
+
+    await fetchProducts(user, storeRow)
+    setLoading(false)
+  }
+
+  async function fetchProducts(u = user, st = store) {
+    const { data, error } = await supabase
+      .from('products').select('*')
+      .order('created_at', { ascending: false })
+    if (error) { console.error(error); return }
+    const mine = (data || []).filter((p) =>
+      (st && p.store_id === st.id) ||
+      p.seller_id === u?.id ||
+      p.user_id === u?.id
+    )
+    setProducts(mine)
+  }
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return products
+    return products.filter((p) =>
+      (p.name || '').toLowerCase().includes(q) ||
+      (p.sku || '').toLowerCase().includes(q)
+    )
+  }, [products, search])
+
+  // ---- SKU تلقائي: بادئة الفئة + رقم متسلسل ----
+  function nextSku(categoryId) {
+    const prefix = CATS.find((c) => c.id === categoryId)?.sku || 'PR'
+    const nums = products
+      .filter((p) => (p.sku || '').startsWith(prefix + '-'))
+      .map((p) => parseInt((p.sku || '').split('-')[1], 10))
+      .filter((n) => !isNaN(n))
+    const next = (nums.length ? Math.max(...nums) : 0) + 1
+    return `${prefix}-${String(next).padStart(3, '0')}`
+  }
+
+  const previewSku = f.category ? nextSku(f.category) : null
+
+  // ---- الصور ----
+  async function onPickImages(e) {
+    const files = Array.from(e.target.files || []).slice(0, 6 - f.images.length)
+    for (const file of files) {
+      try {
+        const blob = await compressImage(file)
+        const dataUrl = await blobToDataURL(blob)
+        setF((prev) => ({ ...prev, images: [...prev.images, { dataUrl, blob }] }))
+      } catch (err) { console.error('compress error', err) }
+    }
+    e.target.value = ''
+  }
+
+  function removeImage(i) {
+    setF((prev) => ({ ...prev, images: prev.images.filter((_, x) => x !== i) }))
+  }
+
+  // رفع الصور: Storage أولاً، وإذا فشل → data URL مضغوط مباشرة
+  async function uploadImages() {
+    const urls = []
+    for (const img of f.images) {
+      if (typeof img === 'string') { urls.push(img); continue } // صورة قديمة عند التعديل
+      let uploaded = null
+      try {
+        const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
+        const { error } = await supabase.storage
+          .from(STORAGE_BUCKET).upload(path, img.blob, { contentType: 'image/jpeg' })
+        if (!error) {
+          const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path)
+          uploaded = data?.publicUrl || null
+        }
+      } catch (e) { /* يفشل بصمت وننتقل للخطة البديلة */ }
+      urls.push(uploaded || img.dataUrl)
+    }
+    return urls
+  }
+
+  function toggleChip(field, value) {
+    setF((prev) => {
+      const has = prev[field].includes(value)
+      return { ...prev, [field]: has ? prev[field].filter((x) => x !== value) : [...prev[field], value] }
+    })
+  }
+
+  function startAdd() {
+    setF({ ...empty, category: CATS[0].id })
+    setEditingId(null)
+    setShowForm(true)
+    setMsg(null)
+  }
+
+  function startEdit(p) {
+    let v = p.variants
+    try { if (typeof v === 'string') v = JSON.parse(v) } catch (e) { v = null }
+    let imgs = []
+    try { imgs = Array.isArray(p.images) ? p.images : JSON.parse(p.images || '[]') } catch (e) { imgs = [] }
+    setF({
+      name: p.name || '', description: p.description || '',
+      category: p.category || CATS[0].id,
+      price: p.price ?? '', currency: p.currency || 'IQD',
+      quantity: String(p.stock_quantity ?? p.quantity ?? 1),
+      hide_price: !!p.hide_price,
+      contact_phone: p.contact_phone || '',
+      video_url: p.video_url || '',
+      sizes: Array.isArray(v?.sizes) ? v.sizes : [],
+      colors: Array.isArray(v?.colors) ? v.colors : [],
+      images: imgs,
+    })
+    setEditingId(p.id)
+    setShowForm(true)
+    setMsg(null)
+  }
+
+  async function save() {
+    setMsg(null)
+    // ---- تحقق ----
+    if (!f.name.trim()) return setMsg({ type: 'err', text: 'اكتب اسم المنتج' })
+    if (!f.category) return setMsg({ type: 'err', text: 'اختر الفئة' })
+    if (!f.hide_price && !f.price) return setMsg({ type: 'err', text: 'اكتب السعر أو فعّل إخفاء السعر' })
+    if (f.hide_price && !f.contact_phone.trim())
+      return setMsg({ type: 'err', text: 'إخفاء السعر يتطلب رقم واتساب للتواصل' })
+
+    setSaving(true)
+    try {
+      const imageUrls = await uploadImages()
+      const sku = editingId
+        ? products.find((p) => p.id === editingId)?.sku || nextSku(f.category)
+        : nextSku(f.category)
+
+      const row = {
+        name: f.name.trim(),
+        title: f.name.trim(),
+        description: f.description.trim() || null,
+        category: f.category,
+        price: f.price === '' ? null : Number(f.price),
+        currency: f.currency,
+        hide_price: f.hide_price,
+        contact_phone: f.contact_phone.trim() || null,
+        video_url: f.video_url.trim() || null,
+        quantity: Number(f.quantity) || 0,
+        stock_quantity: Number(f.quantity) || 0,
+        stock: Number(f.quantity) || 0,
+        variants: (f.sizes.length || f.colors.length)
+          ? { sizes: f.sizes, colors: f.colors }
+          : null,
+        images: imageUrls,
+        image_url: imageUrls[0] || null,
+        sku,
+        is_active: true,
+        status: 'active',
+        // ---- الربط التلقائي بالمتجر والبائع ----
+        store_id: store?.id || null,
+        seller_id: user.id,
+        user_id: user.id,
+        updated_at: new Date().toISOString(),
+      }
+
+      let error
+      if (editingId) {
+        ;({ error } = await supabase.from('products').update(row).eq('id', editingId))
+      } else {
+        ;({ error } = await supabase.from('products').insert(row))
+      }
+      if (error) throw error
+
+      setMsg({ type: 'ok', text: editingId ? '✅ تم تحديث المنتج' : `✅ تم حفظ المنتج — الكود ${sku}#` })
+      setShowForm(false)
+      setF(empty)
+      setEditingId(null)
+      await fetchProducts()
+    } catch (err) {
+      console.error(err)
+      setMsg({ type: 'err', text: 'حدث خطأ: ' + (err.message || 'حاول مرة ثانية') })
+    }
+    setSaving(false)
+  }
+
+  async function remove(p) {
+    if (!window.confirm(`حذف "${p.name || 'المنتج'}" نهائياً؟`)) return
+    const { error } = await supabase.from('products').delete().eq('id', p.id)
+    if (error) { setMsg({ type: 'err', text: 'تعذر الحذف' }); return }
+    await fetchProducts()
+  }
+
+  function firstImg(p) {
+    try {
+      const arr = Array.isArray(p.images) ? p.images : JSON.parse(p.images || '[]')
+      if (arr[0]) return arr[0]
+    } catch (e) { /* ignore */ }
+    return p.image_url || null
+  }
+
+  const priceLabel = isService ? 'سعر الخدمة' : isRealestate ? 'السعر المطلوب' : 'السعر'
+  const nameLabel = isService ? 'اسم الخدمة' : isRealestate ? 'عنوان العقار' : 'اسم المنتج'
+  const addLabel = isService ? '+ إضافة خدمة' : isRealestate ? '+ إضافة عقار' : '+ إضافة منتج'
 
   return (
-    <div dir={ar ? "rtl" : "ltr"} style={{ fontFamily: ar ? "'Tajawal',sans-serif" : "'Inter',sans-serif", background: "#f1f5f9", minHeight: "100vh", paddingBottom: 80 }}>
-      {notification && (
-        <div style={{ position: "fixed", top: 70, left: "50%", transform: "translateX(-50%)", background: notification.type === "success" ? "#16a34a" : "#dc2626", color: "white", borderRadius: 12, padding: "10px 20px", fontSize: 14, fontWeight: "700", zIndex: 999, boxShadow: "0 4px 20px rgba(0,0,0,0.2)", whiteSpace: "nowrap" }}>
-          {notification.msg}
-        </div>
-      )}
+    <div dir="rtl" className="sd-page">
+      <style>{CSS}</style>
 
-      <header style={{ background: "#0f172a", padding: "0 16px", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, zIndex: 100, borderBottom: "1px solid #1e293b" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <svg width="32" height="24" viewBox="0 0 120 44">
-            <polygon points="10,22 60,4 110,22" fill="none" stroke="#f0c040" strokeWidth="3.5"/>
-            <line x1="14" y1="22" x2="14" y2="36" stroke="#f0c040" strokeWidth="3"/>
-            <line x1="106" y1="22" x2="106" y2="36" stroke="#f0c040" strokeWidth="3"/>
-            <line x1="14" y1="36" x2="106" y2="36" stroke="#f0c040" strokeWidth="3"/>
-            <text x="60" y="30" textAnchor="middle" fill="white" fontSize="14" fontWeight="800" fontFamily="Inter">AL-MUKHTAR</text>
-          </svg>
-          <div>
-            <div style={{ color: "white", fontSize: 13, fontWeight: "700" }}>{storeName}</div>
-            <div style={{ color: "#f0c040", fontSize: 10 }}>لوحة التحكم</div>
+      {/* ===== الهيدر ===== */}
+      <header className="sd-header">
+        <div>
+          <div className="sd-store-name">{store?.name_ar || store?.name_en || 'متجري'}</div>
+          <div className="sd-store-type">
+            لوحة التحكم · {CATS_BY_TYPE[storeType] === CATS_BY_TYPE.general ? 'متجر عام' :
+              storeType === 'fashion' ? 'متجر أزياء 👗' :
+              storeType === 'realestate' ? 'مكتب عقارات 🏠' :
+              storeType === 'services' ? 'خدمات 🛠️' : 'إلكترونيات 📱'}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          {newOrders.length > 0 && (
-            <button onClick={() => setPage("orders")} style={{ background: "#dc2626", border: "none", borderRadius: 20, padding: "4px 10px", color: "white", fontSize: 11, fontWeight: "700", cursor: "pointer", fontFamily: "inherit" }}>
-              🔔 {newOrders.length}
-            </button>
-          )}
-          <button onClick={() => setLang(ar ? "en" : "ar")} style={{ background: "#1e293b", border: "1px solid #334155", color: "#94a3b8", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer" }}>
-            {ar ? "EN" : "ع"}
-          </button>
-          <button onClick={handleLogout} style={{ background: "transparent", border: "none", color: "#64748b", cursor: "pointer", fontSize: 18 }}>⏻</button>
-        </div>
+        {store?.store_slug && (
+          <a className="sd-view-store" href={`/store/${store.store_slug}`} target="_blank" rel="noopener noreferrer">
+            عرض متجري ↗
+          </a>
+        )}
       </header>
 
-      <main style={{ padding: "16px 16px 0" }}>
-        {page === "home" && <HomePage ar={ar} userName={userName} storeName={storeName} storeSlug={storeSlug} orders={orders} products={products} todayOrders={todayOrders} totalSales={totalSales} newOrders={newOrders} setPage={setPage} setShowAddListing={setShowAddListing} setSelectedOrder={setSelectedOrder} />}
-        {page === "orders" && <OrdersPage ar={ar} orders={orders} setSelectedOrder={setSelectedOrder} />}
-        {page === "listings" && <ListingsPage ar={ar} products={products} storeSlug={storeSlug} setShowAddListing={setShowAddListing} reload={loadData} showNotif={showNotif} />}
-        {page === "store" && <StorePage ar={ar} store={store} user={user} storeSlug={storeSlug} reload={loadData} showNotif={showNotif} />}
-        {page === "stats" && <StatsPage ar={ar} orders={orders} products={products} totalSales={totalSales} />}
-      </main>
+      {msg && <div className={`sd-msg ${msg.type}`}>{msg.text}</div>}
 
-      {showAddListing && (
-        <AddListingModal ar={ar} storePhone={store?.phone || user?.phone || ""} productsCount={products.length} onClose={() => setShowAddListing(false)} onSave={() => { setShowAddListing(false); loadData(); showNotif("✅ تم حفظ المنتج بنجاح!"); }} />
-      )}
-      {selectedOrder && (
-        <OrderModal ar={ar} order={selectedOrder} onClose={() => setSelectedOrder(null)} onUpdate={() => { setSelectedOrder(null); loadData(); }} showNotif={showNotif} />
-      )}
-
-      <nav style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#0f172a", borderTop: "1px solid #1e293b", display: "flex", zIndex: 100 }}>
-        {[
-          { key: "home", icon: "🏠", ar: "الرئيسية" },
-          { key: "orders", icon: "📦", ar: "الطلبات", badge: newOrders.length },
-          { key: "listings", icon: "🛍️", ar: "منتجاتي" },
-          { key: "store", icon: "🏪", ar: "متجري" },
-          { key: "stats", icon: "📊", ar: "الإحصائيات" },
-        ].map(tab => (
-          <button key={tab.key} onClick={() => setPage(tab.key)} style={{ flex: 1, background: "none", border: "none", padding: "8px 4px 6px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 2, position: "relative" }}>
-            <span style={{ fontSize: 18 }}>{tab.icon}</span>
-            <span style={{ fontSize: 9, color: page === tab.key ? "#f0c040" : "#475569", fontWeight: page === tab.key ? "700" : "400", fontFamily: "inherit" }}>{ar ? tab.ar : tab.key}</span>
-            {tab.badge > 0 && <div style={{ position: "absolute", top: 4, right: "calc(50% - 18px)", background: "#dc2626", borderRadius: "50%", width: 16, height: 16, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "white", fontWeight: "700" }}>{tab.badge}</div>}
-            {page === tab.key && <div style={{ width: 20, height: 2, background: "#f0c040", borderRadius: 2 }} />}
-          </button>
-        ))}
-      </nav>
-    </div>
-  );
-}
-
-// ============================================================
-// HOME PAGE
-// ============================================================
-function HomePage({ ar, userName, storeName, storeSlug, orders, products, todayOrders, totalSales, newOrders, setPage, setShowAddListing, setSelectedOrder }) {
-  const fmt = n => (n || 0).toLocaleString();
-  const copyLink = () => { navigator.clipboard.writeText(`almukhtar.io/store/${storeSlug}`).catch(() => {}); alert("✅ تم نسخ الرابط!"); };
-  return (
-    <div>
-      <div style={{ background: "linear-gradient(135deg,#0f172a 0%,#1e3a5f 100%)", borderRadius: 20, padding: "20px 18px", marginBottom: 16, color: "white", border: "1px solid #1e293b" }}>
-        <div style={{ fontSize: 12, color: "#94a3b8", marginBottom: 4 }}>👋 أهلاً {userName}</div>
-        <div style={{ fontSize: 20, fontWeight: "800", marginBottom: 16 }}>{storeName}</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-          {[{ val: todayOrders.length, label: "طلبات اليوم" }, { val: fmt(totalSales), label: "المبيعات" }, { val: products.length, label: "المنتجات" }].map((s, i) => (
-            <div key={i} style={{ background: "rgba(255,255,255,0.08)", borderRadius: 12, padding: "12px 8px", textAlign: "center" }}>
-              <div style={{ fontSize: 17, fontWeight: "800", color: "#f0c040" }}>{s.val}</div>
-              <div style={{ fontSize: 10, color: "#94a3b8", marginTop: 2 }}>{s.label}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {storeSlug && (
-        <div style={{ background: "white", borderRadius: 14, padding: "12px 16px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", border: "1px solid #e2e8f0" }}>
-          <div>
-            <div style={{ fontSize: 10, color: "#94a3b8" }}>رابط متجرك</div>
-            <div style={{ fontSize: 12, color: "#1a2b6b", fontWeight: "600" }}>almukhtar.io/store/{storeSlug}</div>
-          </div>
-          <button onClick={copyLink} style={{ background: "#f0c040", border: "none", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: "700", cursor: "pointer", color: "#0f172a", fontFamily: "inherit" }}>📋 نسخ</button>
-        </div>
-      )}
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-        <button onClick={() => setShowAddListing(true)} style={{ background: "#f0c040", border: "none", borderRadius: 16, padding: "16px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, fontFamily: "inherit" }}>
-          <div style={{ background: "#0f172a", borderRadius: 10, width: 38, height: 38, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>➕</div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontWeight: "800", color: "#0f172a", fontSize: 13 }}>إضافة منتج</div>
-            <div style={{ fontSize: 10, color: "#374151" }}>منتج، عقار، خدمة...</div>
-          </div>
-        </button>
-        <button onClick={() => setPage("orders")} style={{ background: "white", border: "2px solid #e2e8f0", borderRadius: 16, padding: "16px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 10, fontFamily: "inherit" }}>
-          <div style={{ background: newOrders.length > 0 ? "#fef2f2" : "#f1f5f9", borderRadius: 10, width: 38, height: 38, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>📦</div>
-          <div style={{ textAlign: "right" }}>
-            <div style={{ fontWeight: "800", color: "#1e293b", fontSize: 13 }}>الطلبات</div>
-            <div style={{ fontSize: 10, color: newOrders.length > 0 ? "#dc2626" : "#94a3b8", fontWeight: newOrders.length > 0 ? "700" : "400" }}>
-              {newOrders.length > 0 ? `🔔 ${newOrders.length} جديد` : "لا يوجد جديد"}
-            </div>
-          </div>
-        </button>
-      </div>
-
-      <div style={{ background: "white", borderRadius: 14, padding: "14px 16px", marginBottom: 16, border: "1px solid #e2e8f0" }}>
-        <div style={{ fontSize: 12, color: "#64748b", fontWeight: "600", marginBottom: 10 }}>شارك متجرك</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {[{ icon: "💬", name: "واتساب", color: "#25D366", url: `https://wa.me/?text=تفضل متجرنا: almukhtar.io/store/${storeSlug}` },
-            { icon: "📘", name: "فيسبوك", color: "#1877F2", url: `https://www.facebook.com/sharer/sharer.php?u=almukhtar.io/store/${storeSlug}` },
-            { icon: "📸", name: "إنستغرام", color: "#E1306C", url: "#" },
-            { icon: "🎵", name: "تيك توك", color: "#000", url: "#" }
-          ].map(p => (
-            <a key={p.name} href={p.url} target="_blank" rel="noopener noreferrer" style={{ background: p.color, color: "white", borderRadius: 8, padding: "6px 12px", fontSize: 11, fontWeight: "700", textDecoration: "none" }}>
-              {p.icon} {p.name}
-            </a>
-          ))}
-        </div>
-      </div>
-
-      <div style={{ background: "white", borderRadius: 16, padding: "16px", marginBottom: 16, border: "1px solid #e2e8f0" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <span style={{ fontWeight: "700", color: "#1e293b", fontSize: 15 }}>آخر الطلبات</span>
-          <button onClick={() => setPage("orders")} style={{ background: "none", border: "none", color: "#1a2b6b", fontSize: 12, fontWeight: "600", cursor: "pointer", fontFamily: "inherit" }}>عرض الكل ←</button>
-        </div>
-        {orders.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "24px 0", color: "#94a3b8" }}>
-            <div style={{ fontSize: 36, marginBottom: 8 }}>📦</div>
-            <div style={{ fontSize: 13 }}>لا يوجد طلبات بعد</div>
-          </div>
-        ) : orders.slice(0, 4).map(order => <OrderCard key={order.id} order={order} onClick={() => setSelectedOrder(order)} />)}
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// ORDERS PAGE
-// ============================================================
-function OrdersPage({ ar, orders, setSelectedOrder }) {
-  const [filter, setFilter] = useState("all");
-  const filtered = filter === "all" ? orders : orders.filter(o => o.status === filter);
-  return (
-    <div>
-      <h2 style={{ fontSize: 18, fontWeight: "800", color: "#1e293b", marginBottom: 14 }}>الطلبات</h2>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, overflowX: "auto", paddingBottom: 4 }}>
-        {[["all", "الكل"], ["new", "جديد"], ["processing", "جاري"], ["delivered", "تم"], ["cancelled", "ملغي"]].map(([k, l]) => (
-          <button key={k} onClick={() => setFilter(k)} style={{ background: filter === k ? "#0f172a" : "white", color: filter === k ? "white" : "#64748b", border: "1.5px solid", borderColor: filter === k ? "#0f172a" : "#e2e8f0", borderRadius: 20, padding: "6px 14px", fontSize: 12, fontWeight: "600", cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
-            {l}
-          </button>
-        ))}
-      </div>
-      {filtered.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "40px 0", color: "#94a3b8" }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>📦</div>
-          <div>لا يوجد طلبات</div>
-        </div>
-      ) : filtered.map(order => <OrderCard key={order.id} order={order} onClick={() => setSelectedOrder(order)} />)}
-    </div>
-  );
-}
-
-function OrderCard({ order, onClick }) {
-  const s = STATUS_CONFIG[order.status] || STATUS_CONFIG.new;
-  const ago = (date) => { const m = Math.floor((Date.now() - new Date(date)) / 60000); if (m < 60) return `${m}د`; if (m < 1440) return `${Math.floor(m/60)}س`; return `${Math.floor(m/1440)}ي`; };
-  return (
-    <div onClick={onClick} style={{ background: "#f8fafc", borderRadius: 12, padding: "12px 14px", marginBottom: 10, cursor: "pointer", border: "1.5px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-      <div style={{ flex: 1 }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
-          <span style={{ fontWeight: "700", color: "#1e293b", fontSize: 14 }}>{order.customer_name || "زبون"}</span>
-          <span style={{ background: s.bg, color: s.color, borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: "700" }}>{s.ar}</span>
-        </div>
-        {order.sku && <div style={{ fontSize: 10, color: "#94a3b8", marginBottom: 2 }}>#{order.sku}</div>}
-        <div style={{ color: "#64748b", fontSize: 11 }}>{order.customer_phone || ""}</div>
-      </div>
-      <div style={{ textAlign: "left" }}>
-        <div style={{ fontWeight: "800", color: "#1a2b6b", fontSize: 15 }}>{(order.total || 0).toLocaleString()}</div>
-        <div style={{ color: "#94a3b8", fontSize: 9 }}>د.ع • {ago(order.created_at)}</div>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// LISTINGS PAGE
-// ============================================================
-function ListingsPage({ ar, products, storeSlug, setShowAddListing, reload, showNotif }) {
-  const [search, setSearch] = useState("");
-  const filtered = products.filter(p => (p.name_ar || "").includes(search) || (p.sku || "").includes(search.toUpperCase()));
-
-  const deleteProduct = async (id) => {
-    if (!confirm("هل تريد حذف هذا المنتج؟")) return;
-    await supabase.from("products").delete().eq("id", id);
-    reload();
-    showNotif("تم الحذف", "error");
-  };
-
-  const getTypeIcon = (type) => LISTING_TYPES.find(t => t.key === type)?.icon || "🛍️";
-
-  const copyProductLink = (sku) => {
-    navigator.clipboard.writeText(`almukhtar.io/store/${storeSlug}/p/${sku}`).catch(() => {});
-    showNotif("✅ تم نسخ رابط المنتج");
-  };
-
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <h2 style={{ fontSize: 18, fontWeight: "800", color: "#1e293b", margin: 0 }}>منتجاتي ({products.length})</h2>
-        <button onClick={() => setShowAddListing(true)} style={{ background: "#f0c040", border: "none", borderRadius: 10, padding: "8px 14px", fontWeight: "700", fontSize: 13, cursor: "pointer", fontFamily: "inherit", color: "#0f172a" }}>
-          ➕ إضافة
-        </button>
-      </div>
-      <input value={search} onChange={e => setSearch(e.target.value)} placeholder="🔍 ابحث بالاسم أو رقم SKU..." style={{ width: "100%", background: "white", border: "1.5px solid #e2e8f0", borderRadius: 12, padding: "10px 14px", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none", marginBottom: 14 }} />
-
-      {filtered.length === 0 ? (
-        <div style={{ textAlign: "center", padding: "40px 0", color: "#94a3b8" }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>🛍️</div>
-          <div style={{ fontSize: 15, marginBottom: 16 }}>لا يوجد منتجات بعد</div>
-          <button onClick={() => setShowAddListing(true)} style={{ background: "#0f172a", color: "white", border: "none", borderRadius: 12, padding: "12px 24px", fontWeight: "700", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
-            ➕ أضف أول منتج
-          </button>
-        </div>
-      ) : filtered.map(p => (
-        <div key={p.id} style={{ background: "white", borderRadius: 14, padding: "14px 16px", marginBottom: 12, border: "1.5px solid #e2e8f0" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-            {p.images && p.images.length > 0 ? (
-              <img src={p.images[0]} alt="" style={{ width: 64, height: 64, borderRadius: 10, objectFit: "cover", flexShrink: 0 }} />
-            ) : (
-              <div style={{ width: 64, height: 64, borderRadius: 10, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, flexShrink: 0 }}>
-                {getTypeIcon(p.product_type)}
-              </div>
+      {loading ? (
+        <div className="sd-state">⏳ جاري التحميل...</div>
+      ) : showForm ? (
+        /* ================= نموذج الإضافة / التعديل ================= */
+        <div className="sd-form">
+          <div className="sd-form-title">
+            {editingId ? '✏️ تعديل' : addLabel.replace('+ ', '➕ ')}
+            {previewSku && !editingId && (
+              <span className="sd-sku-preview">الكود التلقائي: <b>{previewSku}#</b></span>
             )}
-            <div style={{ flex: 1 }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
-                <div style={{ flex: 1 }}>
-                  {p.sku && (
-                    <div style={{ display: "inline-block", background: "#f0f4ff", color: "#1a2b6b", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: "800", marginBottom: 4 }}>
-                      #{p.sku}
-                    </div>
-                  )}
-                  <div style={{ fontWeight: "700", color: "#1e293b", fontSize: 14 }}>{p.name_ar}</div>
-                  {p.hide_price ? (
-                    <div style={{ fontSize: 12, color: "#f59e0b", fontWeight: "600", marginTop: 2 }}>💬 السعر عبر واتساب</div>
-                  ) : (
-                    <div style={{ color: "#1a2b6b", fontWeight: "800", fontSize: 15, marginTop: 2 }}>
-                      {(p.price || 0).toLocaleString()} <span style={{ fontSize: 11, fontWeight: "400", color: "#94a3b8" }}>{p.currency === "USD" ? "$" : "د.ع"}</span>
-                      {p.negotiable && <span style={{ fontSize: 10, color: "#16a34a", marginRight: 6 }}>• قابل للتفاوض</span>}
-                    </div>
-                  )}
-                  {/* Variants preview */}
-                  {p.variants && (
-                    <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
-                      {p.variants.sizes && p.variants.sizes.map(s => (
-                        <span key={s} style={{ background: "#f1f5f9", borderRadius: 4, padding: "1px 6px", fontSize: 10, color: "#374151" }}>{s}</span>
-                      ))}
-                      {p.variants.colors && p.variants.colors.map(c => (
-                        <span key={c.name} style={{ display: "flex", alignItems: "center", gap: 3, background: "#f1f5f9", borderRadius: 4, padding: "1px 6px", fontSize: 10 }}>
-                          <span style={{ width: 8, height: 8, borderRadius: "50%", background: c.hex, display: "inline-block", border: "1px solid #e2e8f0" }} />
-                          {c.name}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div style={{ display: "flex", gap: 6 }}>
-                  <button onClick={() => copyProductLink(p.sku)} style={{ background: "#f0f4ff", border: "none", borderRadius: 8, padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>🔗</button>
-                  <button onClick={() => deleteProduct(p.id)} style={{ background: "#fef2f2", border: "none", borderRadius: 8, padding: "6px 8px", fontSize: 12, cursor: "pointer" }}>🗑️</button>
-                </div>
-              </div>
-              {p.images && p.images.length > 1 && (
-                <div style={{ display: "flex", gap: 4, marginTop: 8 }}>
-                  {p.images.slice(1, 5).map((img, i) => (
-                    <img key={i} src={img} alt="" style={{ width: 32, height: 32, borderRadius: 6, objectFit: "cover" }} />
-                  ))}
-                  {p.images.length > 5 && <div style={{ width: 32, height: 32, borderRadius: 6, background: "#f1f5f9", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#64748b", fontWeight: "700" }}>+{p.images.length - 5}</div>}
-                </div>
-              )}
-            </div>
           </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
-// ============================================================
-// STORE PAGE
-// ============================================================
-function StorePage({ ar, store, user, storeSlug, reload, showNotif }) {
-  const [nameAr, setNameAr] = useState(store?.name_ar || "");
-  const [city, setCity] = useState(store?.city || "");
-  const [phone, setPhone] = useState(store?.phone || user?.phone || "");
-  const [desc, setDesc] = useState(store?.description || "");
-  const [saving, setSaving] = useState(false);
+          <label className="sd-label">{nameLabel} *</label>
+          <input className="sd-input" value={f.name}
+            onChange={(e) => setF({ ...f, name: e.target.value })}
+            placeholder={isRealestate ? 'مثال: شقة 150م في المنصور' : 'مثال: فستان سهرة مطرز'} />
 
-  const saveStore = async () => {
-    setSaving(true);
-    await supabase.from("stores").update({ name_ar: nameAr, city, phone, description: desc }).eq("id", store?.id);
-    setSaving(false); reload();
-    showNotif("✅ تم حفظ التغييرات");
-  };
-
-  return (
-    <div>
-      <h2 style={{ fontSize: 18, fontWeight: "800", color: "#1e293b", marginBottom: 14 }}>متجري</h2>
-      <div style={{ background: "linear-gradient(135deg,#0f172a,#1e3a5f)", borderRadius: 16, padding: "20px", marginBottom: 16, color: "white", textAlign: "center" }}>
-        <div style={{ fontSize: 44, marginBottom: 8 }}>🏪</div>
-        <div style={{ fontSize: 20, fontWeight: "800" }}>{store?.name_ar || "متجري"}</div>
-        <div style={{ fontSize: 12, color: "rgba(255,255,255,0.6)", marginTop: 4 }}>almukhtar.io/store/{storeSlug}</div>
-        <div style={{ display: "flex", gap: 8, marginTop: 14, justifyContent: "center" }}>
-          <button onClick={() => { navigator.clipboard.writeText(`almukhtar.io/store/${storeSlug}`).catch(() => {}); showNotif("✅ تم نسخ الرابط"); }} style={{ background: "#f0c040", border: "none", color: "#0f172a", borderRadius: 8, padding: "7px 14px", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: "700" }}>
-            📋 نسخ الرابط
-          </button>
-          <a href={`https://wa.me/?text=almukhtar.io/store/${storeSlug}`} target="_blank" style={{ background: "#25D366", color: "white", borderRadius: 8, padding: "7px 14px", fontSize: 12, textDecoration: "none", fontWeight: "700" }}>
-            💬 واتساب
-          </a>
-        </div>
-      </div>
-
-      <div style={{ background: "white", borderRadius: 14, padding: "14px 16px", marginBottom: 16, border: "1.5px solid #e2e8f0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <div style={{ fontSize: 11, color: "#94a3b8" }}>باقتك الحالية</div>
-          <div style={{ fontWeight: "800", fontSize: 16, color: "#1a2b6b" }}>
-            {store?.plan === "premium" ? "👑 مميز" : store?.plan === "basic" ? "⭐ أساسي" : "🆓 مجاني"}
-          </div>
-        </div>
-        <button style={{ background: "#f0c040", border: "none", borderRadius: 10, padding: "8px 14px", fontWeight: "700", fontSize: 12, cursor: "pointer", fontFamily: "inherit", color: "#0f172a" }}>
-          ترقية ⬆️
-        </button>
-      </div>
-
-      <div style={{ background: "white", borderRadius: 14, padding: "16px", border: "1.5px solid #e2e8f0" }}>
-        <div style={{ fontWeight: "700", marginBottom: 14, color: "#1e293b" }}>إعدادات المتجر</div>
-        {[["اسم المتجر", nameAr, setNameAr, "text"], ["رقم الهاتف", phone, setPhone, "tel"], ["وصف المتجر", desc, setDesc, "text"]].map(([label, val, setter, type]) => (
-          <div key={label} style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>{label}</div>
-            <input type={type} value={val} onChange={e => setter(e.target.value)} style={{ width: "100%", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none" }} />
-          </div>
-        ))}
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>المحافظة</div>
-          <select value={city} onChange={e => setCity(e.target.value)} style={{ width: "100%", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "10px 14px", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none" }}>
-            <option value="">اختر المحافظة</option>
-            {IRAQI_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
-        <button onClick={saveStore} disabled={saving} style={{ background: saving ? "#94a3b8" : "#0f172a", color: "white", border: "none", borderRadius: 12, padding: "13px", width: "100%", fontWeight: "700", fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>
-          {saving ? "جاري الحفظ..." : "💾 حفظ التغييرات"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// STATS PAGE
-// ============================================================
-function StatsPage({ ar, orders, products, totalSales }) {
-  const delivered = orders.filter(o => o.status === "delivered").length;
-  const rate = orders.length > 0 ? Math.round((delivered / orders.length) * 100) : 0;
-  const last7 = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(); d.setDate(d.getDate() - (6 - i));
-    return { day: d.toLocaleDateString("ar", { weekday: "short" }), count: orders.filter(o => new Date(o.created_at).toDateString() === d.toDateString()).length };
-  });
-  const maxCount = Math.max(...last7.map(d => d.count), 1);
-  return (
-    <div>
-      <h2 style={{ fontSize: 18, fontWeight: "800", color: "#1e293b", marginBottom: 14 }}>الإحصائيات</h2>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
-        {[{ label: "إجمالي المبيعات", val: totalSales.toLocaleString(), unit: "د.ع", color: "#1a2b6b" }, { label: "الطلبات", val: orders.length, unit: "", color: "#2563eb" }, { label: "تم التوصيل", val: delivered, unit: "", color: "#16a34a" }, { label: "نسبة النجاح", val: rate + "%", unit: "", color: "#d97706" }].map((s, i) => (
-          <div key={i} style={{ background: "white", borderRadius: 14, padding: "14px", border: "1.5px solid #e2e8f0" }}>
-            <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>{s.label}</div>
-            <div style={{ fontSize: 22, fontWeight: "800", color: s.color }}>{s.val}</div>
-            <div style={{ fontSize: 10, color: "#94a3b8" }}>{s.unit}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{ background: "white", borderRadius: 16, padding: "16px", border: "1.5px solid #e2e8f0" }}>
-        <div style={{ fontWeight: "700", color: "#1e293b", marginBottom: 16, fontSize: 14 }}>الطلبات - آخر 7 أيام</div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 8, height: 100 }}>
-          {last7.map((d, i) => (
-            <div key={i} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
-              {d.count > 0 && <span style={{ fontSize: 9, color: "#1a2b6b", fontWeight: "700" }}>{d.count}</span>}
-              <div style={{ width: "100%", background: i === 6 ? "#f0c040" : "#e2e8f0", borderRadius: "4px 4px 0 0", height: Math.max((d.count / maxCount) * 80, 4), minHeight: 4 }} />
-              <span style={{ fontSize: 9, color: "#94a3b8" }}>{d.day}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ============================================================
-// ADD LISTING MODAL - FULL FEATURED
-// ============================================================
-function AddListingModal({ ar, storePhone, productsCount, onClose, onSave }) {
-  const [listingType, setListingType] = useState("product");
-  const [step, setStep] = useState(1);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [aiLoading, setAiLoading] = useState(false);
-  const [compressing, setCompressing] = useState(false);
-
-  // Media
-  const [images, setImages] = useState([]);
-  const [videoUrl, setVideoUrl] = useState("");
-
-  // Common
-  const [nameAr, setNameAr] = useState("");
-  const [nameEn, setNameEn] = useState("");
-  const [desc, setDesc] = useState("");
-  const [price, setPrice] = useState("");
-  const [currency, setCurrency] = useState("IQD");
-  const [hidePrice, setHidePrice] = useState(false);
-  const [stock, setStock] = useState("1");
-  const [barcode, setBarcode] = useState("");
-  const [category, setCategory] = useState("");
-  const [negotiable, setNegotiable] = useState(false);
-  const [contactPhone, setContactPhone] = useState(storePhone || "");
-
-  // Variants
-  const [selectedSizes, setSelectedSizes] = useState([]);
-  const [selectedColors, setSelectedColors] = useState([]);
-  const [customColor, setCustomColor] = useState("");
-  const [showVariants, setShowVariants] = useState(false);
-
-  // Real estate
-  const [reType, setReType] = useState("");
-  const [reFor, setReFor] = useState("sale");
-  const [reCity, setReCity] = useState("");
-  const [reArea, setReArea] = useState("");
-  const [reAddress, setReAddress] = useState("");
-  const [reSize, setReSize] = useState("");
-  const [reRooms, setReRooms] = useState("");
-  const [reBaths, setBaths] = useState("");
-  const [reFloors, setReFloors] = useState("");
-  const [reAge, setReAge] = useState("");
-  const [reOwnership, setReOwnership] = useState("");
-
-  // Service
-  const [serviceType, setServiceType] = useState("");
-  const [serviceCity, setServiceCity] = useState("");
-  const [serviceArea, setServiceArea] = useState("");
-  const [serviceHours, setServiceHours] = useState("");
-
-  const maxSteps = listingType === "product" ? 3 : 2;
-  const isClothesCategory = ["clothes", "shoes"].includes(category);
-  const sizesList = category === "shoes" ? SIZES_SHOES : SIZES_CLOTHES;
-
-  // Image upload with compression
-  const handleImageUpload = async (e) => {
-    const files = Array.from(e.target.files);
-    if (images.length + files.length > 8) { setError("الحد الأقصى 8 صور"); return; }
-    setCompressing(true);
-    try {
-      const compressed = await Promise.all(files.map(f => compressImage(f, 300)));
-      setImages(prev => [...prev, ...compressed]);
-    } catch { setError("خطأ في رفع الصور"); }
-    setCompressing(false);
-  };
-
-  const removeImage = (idx) => setImages(prev => prev.filter((_, i) => i !== idx));
-
-  const toggleSize = (size) => setSelectedSizes(prev => prev.includes(size) ? prev.filter(s => s !== size) : [...prev, size]);
-  const toggleColor = (color) => setSelectedColors(prev => prev.some(c => c.name === color.name) ? prev.filter(c => c.name !== color.name) : [...prev, color]);
-  const addCustomColor = () => {
-    if (!customColor) return;
-    setSelectedColors(prev => [...prev, { name: customColor, hex: "#94a3b8" }]);
-    setCustomColor("");
-  };
-
-  const generateAI = async () => {
-    if (!nameAr && !nameEn) { setError("أدخل اسم المنتج أولاً"); return; }
-    setAiLoading(true);
-    try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-6",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: `أنت خبير في كتابة محتوى التجارة الإلكترونية للسوق العراقي. اكتب وصفاً احترافياً للمنتج: "${nameAr || nameEn}" الفئة: "${category || "عام"}". أجب بـ JSON فقط: {"nameAr":"اسم محسّن","nameEn":"Improved name","description":"وصف احترافي جذاب 3-4 جمل بالعربي"}` }]
-        })
-      });
-      const data = await response.json();
-      const parsed = JSON.parse(data.content?.[0]?.text?.replace(/```json|```/g, "").trim() || "{}");
-      if (parsed.nameAr) setNameAr(parsed.nameAr);
-      if (parsed.nameEn) setNameEn(parsed.nameEn);
-      if (parsed.description) setDesc(parsed.description);
-    } catch { setError("تعذر توليد البيانات"); }
-    setAiLoading(false);
-  };
-
-  const handleSave = async () => {
-    if (listingType === "product" && !nameAr) { setError("أدخل اسم المنتج"); return; }
-    if (listingType === "real_estate" && !reType) { setError("اختر نوع العقار"); return; }
-    if (listingType === "service" && !serviceType) { setError("اختر نوع الخدمة"); return; }
-    if (!hidePrice && !price) { setError("أدخل السعر أو فعّل خيار الاستفسار عبر واتساب"); return; }
-
-    setSaving(true); setError("");
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("No user");
-      const { data: storeData } = await supabase.from("stores").select("id").eq("owner_id", user.id).single();
-      if (!storeData) { setError("لم يتم العثور على المتجر"); setSaving(false); return; }
-
-      // Generate SKU
-      const sku = generateSKU(category || listingType, productsCount);
-
-      const productName = listingType === "product" ? nameAr
-        : listingType === "real_estate" ? `${REAL_ESTATE_TYPES.find(t=>t.key===reType)?.ar || reType} ${reFor === "sale" ? "للبيع" : "للإيجار"} - ${reCity}`
-        : serviceType;
-
-      const { error: err } = await supabase.from("products").insert({
-        store_id: storeData.id,
-        product_type: listingType,
-        name_ar: productName,
-        name_en: nameEn || productName,
-        description: desc,
-        price: hidePrice ? null : (parseFloat(price) || 0),
-        currency: currency,
-        hide_price: hidePrice,
-        stock_quantity: parseInt(stock) || 1,
-        barcode: barcode || null,
-        category: category || null,
-        is_active: true,
-        negotiable: negotiable,
-        contact_phone: contactPhone || null,
-        images: images,
-        video_url: videoUrl || null,
-        sku: sku,
-        variants: (selectedSizes.length > 0 || selectedColors.length > 0) ? { sizes: selectedSizes, colors: selectedColors } : null,
-        metadata: listingType === "real_estate"
-          ? { reType, reFor, reCity, reArea, reAddress, reSize, reRooms, reBaths, reFloors, reAge, reOwnership }
-          : listingType === "service"
-          ? { serviceType, serviceCity, serviceArea, serviceHours }
-          : {},
-        created_at: new Date().toISOString(),
-      });
-      if (err) throw err;
-      onSave();
-    } catch (err) {
-      console.error(err);
-      setError("حدث خطأ، حاول مرة ثانية");
-    }
-    setSaving(false);
-  };
-
-  const inputStyle = { width: "100%", background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "11px 14px", fontSize: 14, fontFamily: "inherit", boxSizing: "border-box", outline: "none" };
-  const selectStyle = { ...inputStyle, cursor: "pointer" };
-  const labelStyle = { fontSize: 12, color: "#64748b", fontWeight: "600", marginBottom: 6, display: "block" };
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "flex-end" }}>
-      <div dir="rtl" style={{ background: "white", borderRadius: "24px 24px 0 0", width: "100%", maxHeight: "92vh", overflowY: "auto", padding: "20px 16px 60px", fontFamily: "Tajawal,sans-serif" }}>
-
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h3 style={{ margin: 0, fontSize: 17, fontWeight: "800", color: "#1e293b" }}>إضافة منتج جديد</h3>
-          <button onClick={onClose} style={{ background: "#f1f5f9", border: "none", borderRadius: 8, width: 32, height: 32, fontSize: 18, cursor: "pointer" }}>✕</button>
-        </div>
-
-        {/* TYPE SELECTOR */}
-        <div style={{ marginBottom: 20 }}>
-          <label style={labelStyle}>نوع المنتج</label>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-            {LISTING_TYPES.map(t => (
-              <button key={t.key} onClick={() => { setListingType(t.key); setStep(1); setError(""); }} style={{ background: listingType === t.key ? "#0f172a" : "#f8fafc", color: listingType === t.key ? "white" : "#374151", border: `2px solid ${listingType === t.key ? "#0f172a" : "#e2e8f0"}`, borderRadius: 12, padding: "12px 4px", cursor: "pointer", textAlign: "center", fontFamily: "inherit" }}>
-                <div style={{ fontSize: 24 }}>{t.icon}</div>
-                <div style={{ fontSize: 11, fontWeight: "700", marginTop: 2 }}>{t.ar}</div>
+          <label className="sd-label">الفئة *</label>
+          <div className="sd-cat-row">
+            {CATS.map((c) => (
+              <button key={c.id} type="button"
+                className={`sd-cat ${f.category === c.id ? 'active' : ''}`}
+                onClick={() => setF({ ...f, category: c.id })}>
+                {c.icon} {c.label}
               </button>
             ))}
           </div>
-        </div>
 
-        {/* STEP BAR */}
-        {listingType === "product" && (
-          <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
-            {Array.from({ length: maxSteps }, (_, i) => (
-              <div key={i} style={{ flex: 1, height: 4, borderRadius: 4, background: i < step ? "#f0c040" : "#e2e8f0" }} />
-            ))}
-            <div style={{ fontSize: 11, color: "#94a3b8", whiteSpace: "nowrap", marginRight: 4 }}>{step}/{maxSteps}</div>
+          {/* ===== Magic Toggle ===== */}
+          <div className="sd-toggle-box">
+            <label className="sd-toggle">
+              <input type="checkbox" checked={f.hide_price}
+                onChange={(e) => setF({ ...f, hide_price: e.target.checked })} />
+              <span className="sd-slider" />
+            </label>
+            <div>
+              <div className="sd-toggle-title">🔓 إخفاء السعر وتفعيل الاستفسار عبر واتساب</div>
+              <div className="sd-toggle-sub">
+                {f.hide_price
+                  ? 'الزبون سيرى زر واتساب أخضر بدل السعر — والكود يُرسل تلقائياً بالرسالة'
+                  : 'السعر يظهر علناً للزبائن'}
+              </div>
+            </div>
           </div>
-        )}
 
-        {/* ===== MEDIA UPLOAD ===== */}
-        <div style={{ marginBottom: 20, background: "#f8fafc", borderRadius: 14, padding: "14px" }}>
-          <label style={{ ...labelStyle, marginBottom: 10 }}>📸 الصور والفيديو</label>
+          <div className="sd-row">
+            <div style={{ flex: 2 }}>
+              <label className="sd-label">
+                {priceLabel} {f.hide_price ? '(اختياري — للتوثيق الداخلي)' : '*'}
+              </label>
+              <input className="sd-input" type="number" inputMode="numeric" value={f.price}
+                onChange={(e) => setF({ ...f, price: e.target.value })} placeholder="20000" />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="sd-label">العملة</label>
+              <select className="sd-input" value={f.currency}
+                onChange={(e) => setF({ ...f, currency: e.target.value })}>
+                <option value="IQD">د.ع</option>
+                <option value="USD">$ دولار</option>
+              </select>
+            </div>
+            {!isService && !isRealestate && (
+              <div style={{ flex: 1 }}>
+                <label className="sd-label">الكمية</label>
+                <input className="sd-input" type="number" inputMode="numeric" value={f.quantity}
+                  onChange={(e) => setF({ ...f, quantity: e.target.value })} />
+              </div>
+            )}
+          </div>
+          {f.currency === 'USD' && (
+            <div className="sd-hint">💵 السعر بالدولار سيُعرض للزبون بالدينار حسب سعر الصرف تلقائياً</div>
+          )}
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 10 }}>
-            {images.map((img, i) => (
-              <div key={i} style={{ position: "relative", aspectRatio: "1" }}>
-                <img src={img} alt="" style={{ width: "100%", height: "100%", borderRadius: 10, objectFit: "cover", border: "1.5px solid #e2e8f0" }} />
-                <button onClick={() => removeImage(i)} style={{ position: "absolute", top: -6, right: -6, background: "#dc2626", border: "none", borderRadius: "50%", width: 20, height: 20, color: "white", fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
-                {i === 0 && <div style={{ position: "absolute", bottom: 2, left: 2, background: "#f0c040", color: "#0f172a", borderRadius: 4, padding: "1px 4px", fontSize: 8, fontWeight: "700" }}>رئيسية</div>}
+          <label className="sd-label">رقم واتساب للتواصل {f.hide_price && '*'}</label>
+          <input className="sd-input" dir="ltr" value={f.contact_phone}
+            onChange={(e) => setF({ ...f, contact_phone: e.target.value })}
+            placeholder="9647701234567" />
+
+          <label className="sd-label">الوصف</label>
+          <textarea className="sd-input" rows={3} value={f.description}
+            onChange={(e) => setF({ ...f, description: e.target.value })}
+            placeholder={isRealestate ? 'المساحة، عدد الغرف، الطابق، الموقع...' : 'تفاصيل المنتج...'} />
+
+          {/* ===== المقاسات والألوان (للأزياء) ===== */}
+          {showVariants && (
+            <>
+              <label className="sd-label">المقاسات المتوفرة</label>
+              <div className="sd-chips">
+                {SIZE_PRESETS.map((s) => (
+                  <button key={s} type="button"
+                    className={`sd-chip ${f.sizes.includes(s) ? 'active' : ''}`}
+                    onClick={() => toggleChip('sizes', s)}>{s}</button>
+                ))}
+              </div>
+              <label className="sd-label">الألوان المتوفرة</label>
+              <div className="sd-chips">
+                {COLOR_PRESETS.map((c) => (
+                  <button key={c} type="button"
+                    className={`sd-chip ${f.colors.includes(c) ? 'active' : ''}`}
+                    onClick={() => toggleChip('colors', c)}>{c}</button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* ===== الصور ===== */}
+          <label className="sd-label">الصور (حتى 6 — تُضغط تلقائياً للتحميل السريع) 📸</label>
+          <div className="sd-imgs">
+            {f.images.map((img, i) => (
+              <div key={i} className="sd-img-thumb">
+                <img src={typeof img === 'string' ? img : img.dataUrl} alt="" />
+                <button type="button" onClick={() => removeImage(i)}>✕</button>
               </div>
             ))}
-            {images.length < 8 && (
-              <label style={{ aspectRatio: "1", background: compressing ? "#f0f4ff" : "white", border: "2px dashed #e2e8f0", borderRadius: 10, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>
-                {compressing ? <div style={{ fontSize: 20 }}>⏳</div> : <div style={{ fontSize: 24 }}>📷</div>}
-                <span style={{ fontSize: 9, color: "#94a3b8", marginTop: 2 }}>{compressing ? "ضغط..." : "إضافة"}</span>
-                <input type="file" accept="image/*" multiple onChange={handleImageUpload} style={{ display: "none" }} disabled={compressing} />
+            {f.images.length < 6 && (
+              <label className="sd-img-add">
+                +
+                <input type="file" accept="image/*" multiple hidden onChange={onPickImages} />
               </label>
             )}
           </div>
 
-          {images.length > 0 && (
-            <div style={{ fontSize: 10, color: "#16a34a", marginBottom: 8 }}>
-              ✅ {images.length} صورة — تم الضغط تلقائياً للتحميل السريع
-            </div>
-          )}
+          <label className="sd-label">رابط فيديو (يوتيوب / تيك توك — اختياري) 🎥</label>
+          <input className="sd-input" dir="ltr" value={f.video_url}
+            onChange={(e) => setF({ ...f, video_url: e.target.value })}
+            placeholder="https://youtube.com/..." />
 
-          <div>
-            <label style={{ ...labelStyle, marginBottom: 4 }}>🎥 رابط فيديو (يوتيوب / تيك توك - اختياري)</label>
-            <input value={videoUrl} onChange={e => setVideoUrl(e.target.value)} placeholder="https://youtube.com/..." style={{ ...inputStyle, direction: "ltr", background: "white" }} />
+          <div className="sd-form-actions">
+            <button className="sd-save" onClick={save} disabled={saving}>
+              {saving ? '⏳ جاري الحفظ...' : editingId ? '✔ حفظ التعديلات' : '✔ حفظ المنتج'}
+            </button>
+            <button className="sd-cancel" onClick={() => { setShowForm(false); setEditingId(null) }}>
+              إلغاء
+            </button>
           </div>
         </div>
+      ) : (
+        /* ================= قائمة المنتجات ================= */
+        <div className="sd-list-wrap">
+          <div className="sd-list-head">
+            <h2>منتجاتي ({products.length})</h2>
+            <button className="sd-add" onClick={startAdd}>{addLabel}</button>
+          </div>
 
-        {/* ===== PRODUCT FORM ===== */}
-        {listingType === "product" && (
-          <>
-            {step === 1 && (
-              <>
-                <div style={{ marginBottom: 14 }}>
-                  <label style={labelStyle}>اسم المنتج (عربي) *</label>
-                  <input value={nameAr} onChange={e => setNameAr(e.target.value)} placeholder="مثال: فستان سواري أسود" style={inputStyle} />
-                </div>
-                <div style={{ marginBottom: 14 }}>
-                  <label style={labelStyle}>اسم المنتج (إنكليزي)</label>
-                  <input value={nameEn} onChange={e => setNameEn(e.target.value)} placeholder="e.g. Black Evening Dress" style={inputStyle} />
-                </div>
-                <div style={{ marginBottom: 14 }}>
-                  <label style={labelStyle}>الفئة</label>
-                  <select value={category} onChange={e => setCategory(e.target.value)} style={selectStyle}>
-                    <option value="">اختر الفئة</option>
-                    {PRODUCT_CATEGORIES.map(c => <option key={c.key} value={c.key}>{c.ar}</option>)}
-                  </select>
-                </div>
-                <div style={{ marginBottom: 16 }}>
-                  <label style={labelStyle}>الوصف</label>
-                  <textarea value={desc} onChange={e => setDesc(e.target.value)} placeholder="اكتب وصفاً مفصلاً للمنتج..." rows={3} style={{ ...inputStyle, resize: "none" }} />
-                </div>
-                <button onClick={generateAI} disabled={aiLoading} style={{ background: aiLoading ? "#e2e8f0" : "linear-gradient(135deg,#667eea,#764ba2)", color: aiLoading ? "#94a3b8" : "white", border: "none", borderRadius: 12, padding: "12px", width: "100%", fontWeight: "700", fontSize: 14, cursor: aiLoading ? "not-allowed" : "pointer", fontFamily: "inherit", marginBottom: 4 }}>
-                  {aiLoading ? "⏳ جاري التوليد..." : "✨ توليد الوصف بالذكاء الاصطناعي"}
-                </button>
-              </>
-            )}
+          <input className="sd-input sd-search" value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="🔍 ابحث بالاسم أو رقم SKU..." />
 
-            {step === 2 && (
-              <>
-                {/* ===== MAGIC PRICE TOGGLE ===== */}
-                <div style={{ background: hidePrice ? "#fffbeb" : "#f0fdf4", border: `2px solid ${hidePrice ? "#f59e0b" : "#16a34a"}`, borderRadius: 14, padding: "14px 16px", marginBottom: 16 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: hidePrice ? 8 : 0 }}>
-                    <div>
-                      <div style={{ fontWeight: "700", fontSize: 14, color: "#1e293b" }}>
-                        {hidePrice ? "💬 الاستفسار عبر واتساب" : "💰 عرض السعر للزبون"}
-                      </div>
-                      <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
-                        {hidePrice ? "سيظهر زر واتساب بدلاً من السعر" : "سيظهر السعر علناً مع زر السلة"}
-                      </div>
-                    </div>
-                    {/* Toggle Switch */}
-                    <div onClick={() => setHidePrice(!hidePrice)} style={{ width: 48, height: 26, borderRadius: 13, background: hidePrice ? "#f59e0b" : "#e2e8f0", position: "relative", cursor: "pointer", transition: "background 0.2s", flexShrink: 0 }}>
-                      <div style={{ width: 20, height: 20, borderRadius: "50%", background: "white", position: "absolute", top: 3, left: hidePrice ? 25 : 3, transition: "left 0.2s", boxShadow: "0 1px 4px rgba(0,0,0,0.2)" }} />
-                    </div>
-                  </div>
-                  {hidePrice && (
-                    <div style={{ background: "white", borderRadius: 10, padding: "10px 12px", fontSize: 12, color: "#92400e" }}>
-                      🔗 سيتم إرسال رسالة واتساب تلقائية: "أريد الاستفسار عن المنتج: [اسم المنتج]"
-                    </div>
-                  )}
-                </div>
-
-                {!hidePrice && (
-                  <div style={{ marginBottom: 14 }}>
-                    <label style={labelStyle}>السعر *</label>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <input value={price} onChange={e => setPrice(e.target.value)} type="number" placeholder="0" style={{ ...inputStyle, flex: 1 }} />
-                      <select value={currency} onChange={e => setCurrency(e.target.value)} style={{ background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "11px 10px", fontSize: 14, fontFamily: "inherit", outline: "none", cursor: "pointer", minWidth: 70 }}>
-                        <option value="IQD">د.ع</option>
-                        <option value="USD">$ دولار</option>
-                      </select>
-                    </div>
-                    {currency === "USD" && price && (
-                      <div style={{ fontSize: 11, color: "#2563eb", marginTop: 4 }}>
-                        ≈ {(parseFloat(price) * 1480).toLocaleString()} د.ع (حسب سعر الصرف الحالي)
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-                  <div>
-                    <label style={labelStyle}>الكمية المتوفرة</label>
-                    <input value={stock} onChange={e => setStock(e.target.value)} type="number" placeholder="1" style={inputStyle} />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>الباركود (اختياري)</label>
-                    <input value={barcode} onChange={e => setBarcode(e.target.value)} placeholder="000000000" style={inputStyle} />
-                  </div>
-                </div>
-
-                <div style={{ marginBottom: 14 }}>
-                  <label style={labelStyle}>رقم التواصل للواتساب</label>
-                  <input value={contactPhone} onChange={e => setContactPhone(e.target.value)} type="tel" placeholder="07X XXXX XXXX" style={{ ...inputStyle, direction: "ltr" }} />
-                </div>
-
-                {/* NEGOTIABLE */}
-                {!hidePrice && (
-                  <div onClick={() => setNegotiable(!negotiable)} style={{ display: "flex", alignItems: "center", gap: 10, background: negotiable ? "#f0fdf4" : "#f8fafc", border: `1.5px solid ${negotiable ? "#16a34a" : "#e2e8f0"}`, borderRadius: 12, padding: "12px 14px", marginBottom: 16, cursor: "pointer" }}>
-                    <div style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${negotiable ? "#16a34a" : "#cbd5e1"}`, background: negotiable ? "#16a34a" : "white", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      {negotiable && <span style={{ color: "white", fontSize: 13 }}>✓</span>}
-                    </div>
-                    <span style={{ fontSize: 13, color: "#374151", fontWeight: "600" }}>السعر قابل للتفاوض</span>
-                  </div>
-                )}
-
-                {/* VARIANTS TOGGLE */}
-                <div onClick={() => setShowVariants(!showVariants)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#f0f4ff", borderRadius: 12, padding: "12px 16px", marginBottom: showVariants ? 0 : 4, cursor: "pointer", border: "1.5px solid #c7d2fe" }}>
-                  <div>
-                    <div style={{ fontWeight: "700", color: "#1a2b6b", fontSize: 14 }}>👗 المقاسات والألوان</div>
-                    <div style={{ fontSize: 11, color: "#64748b" }}>
-                      {selectedSizes.length > 0 || selectedColors.length > 0
-                        ? `${selectedSizes.length} مقاس • ${selectedColors.length} لون`
-                        : "اضغط لإضافة خيارات المنتج"}
-                    </div>
-                  </div>
-                  <span style={{ fontSize: 18 }}>{showVariants ? "▲" : "▼"}</span>
-                </div>
-
-                {showVariants && (
-                  <div style={{ background: "#f8fafc", borderRadius: "0 0 12px 12px", padding: "14px", marginBottom: 4, border: "1.5px solid #c7d2fe", borderTop: "none" }}>
-                    {/* SIZES */}
-                    <div style={{ marginBottom: 14 }}>
-                      <label style={labelStyle}>{category === "shoes" ? "مقاسات الأحذية" : "المقاسات"}</label>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                        {sizesList.map(size => (
-                          <button key={size} onClick={() => toggleSize(size)} style={{ background: selectedSizes.includes(size) ? "#0f172a" : "white", color: selectedSizes.includes(size) ? "white" : "#374151", border: `1.5px solid ${selectedSizes.includes(size) ? "#0f172a" : "#e2e8f0"}`, borderRadius: 8, padding: "6px 12px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: selectedSizes.includes(size) ? "700" : "400" }}>
-                            {size}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* COLORS */}
-                    <div>
-                      <label style={labelStyle}>الألوان</label>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
-                        {COLORS_LIST.map(color => (
-                          <button key={color.name} onClick={() => toggleColor(color)} style={{ display: "flex", alignItems: "center", gap: 6, background: selectedColors.some(c => c.name === color.name) ? "#f0f4ff" : "white", border: `1.5px solid ${selectedColors.some(c => c.name === color.name) ? "#1a2b6b" : "#e2e8f0"}`, borderRadius: 8, padding: "5px 10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>
-                            <span style={{ width: 14, height: 14, borderRadius: "50%", background: color.hex, border: "1px solid #e2e8f0", display: "inline-block", flexShrink: 0 }} />
-                            {color.name}
-                            {selectedColors.some(c => c.name === color.name) && <span style={{ color: "#1a2b6b", fontSize: 10 }}>✓</span>}
-                          </button>
-                        ))}
-                      </div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <input value={customColor} onChange={e => setCustomColor(e.target.value)} placeholder="لون مخصص..." style={{ ...inputStyle, flex: 1, padding: "8px 12px", fontSize: 12 }} />
-                        <button onClick={addCustomColor} style={{ background: "#0f172a", color: "white", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}>إضافة</button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-
-            {step === 3 && (
-              <div style={{ textAlign: "center", padding: "10px 0" }}>
-                <div style={{ fontSize: 50, marginBottom: 12 }}>✅</div>
-                <h3 style={{ fontSize: 17, fontWeight: "800", color: "#1e293b", marginBottom: 8 }}>مراجعة المنتج</h3>
-
-                {/* SKU Preview */}
-                <div style={{ background: "#f0f4ff", borderRadius: 10, padding: "10px", marginBottom: 16, display: "inline-block" }}>
-                  <div style={{ fontSize: 11, color: "#64748b" }}>كود المنتج التلقائي (SKU)</div>
-                  <div style={{ fontSize: 20, fontWeight: "800", color: "#1a2b6b" }}>#{generateSKU(category || "other", productsCount)}</div>
-                  <div style={{ fontSize: 10, color: "#94a3b8" }}>سيُرسل في رسالة الواتساب تلقائياً</div>
-                </div>
-
-                <div style={{ background: "#f8fafc", borderRadius: 14, padding: "16px", textAlign: "right", marginBottom: 16 }}>
-                  {[
-                    ["الاسم", nameAr],
-                    ["الفئة", PRODUCT_CATEGORIES.find(c => c.key === category)?.ar || "-"],
-                    ["السعر", hidePrice ? "💬 واتساب" : `${parseInt(price || 0).toLocaleString()} ${currency === "USD" ? "$" : "د.ع"}`],
-                    ["الكمية", stock],
-                    ["الصور", `${images.length} صورة`],
-                    ["المقاسات", selectedSizes.join(" • ") || "-"],
-                    ["الألوان", selectedColors.map(c => c.name).join(" • ") || "-"],
-                  ].map(([k, v]) => (
-                    <div key={k} style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 13 }}>
-                      <span style={{ color: "#64748b" }}>{k}</span>
-                      <span style={{ fontWeight: "700", color: "#1e293b" }}>{v || "-"}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* ===== REAL ESTATE FORM ===== */}
-        {listingType === "real_estate" && (
-          <>
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>نوع العقار *</label>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
-                {REAL_ESTATE_TYPES.map(t => (
-                  <button key={t.key} onClick={() => setReType(t.key)} style={{ background: reType === t.key ? "#0f172a" : "#f8fafc", color: reType === t.key ? "white" : "#374151", border: `1.5px solid ${reType === t.key ? "#0f172a" : "#e2e8f0"}`, borderRadius: 10, padding: "10px 6px", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: reType === t.key ? "700" : "400" }}>
-                    {t.ar}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                {[["sale", "🏷️ للبيع"], ["rent", "🔑 للإيجار"]].map(([k, l]) => (
-                  <button key={k} onClick={() => setReFor(k)} style={{ background: reFor === k ? "#0f172a" : "#f8fafc", color: reFor === k ? "white" : "#374151", border: `1.5px solid ${reFor === k ? "#0f172a" : "#e2e8f0"}`, borderRadius: 10, padding: "12px", fontSize: 13, cursor: "pointer", fontFamily: "inherit", fontWeight: "600" }}>{l}</button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-              <div>
-                <label style={labelStyle}>المحافظة</label>
-                <select value={reCity} onChange={e => setReCity(e.target.value)} style={selectStyle}>
-                  <option value="">اختر</option>
-                  {IRAQI_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={labelStyle}>المنطقة</label>
-                <input value={reArea} onChange={e => setReArea(e.target.value)} placeholder="مثال: المنصور" style={inputStyle} />
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>العنوان التقريبي</label>
-              <input value={reAddress} onChange={e => setReAddress(e.target.value)} placeholder="وصف موقع العقار..." style={inputStyle} />
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
-              {[["المساحة م²", reSize, setReSize], ["الغرف", reRooms, setReRooms], ["الحمامات", reBaths, setBaths]].map(([l, v, s]) => (
-                <div key={l}>
-                  <label style={labelStyle}>{l}</label>
-                  <input value={v} onChange={e => s(e.target.value)} type="number" placeholder="0" style={inputStyle} />
-                </div>
-              ))}
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-              <div>
-                <label style={labelStyle}>عدد الطوابق</label>
-                <input value={reFloors} onChange={e => setReFloors(e.target.value)} type="number" placeholder="0" style={inputStyle} />
-              </div>
-              <div>
-                <label style={labelStyle}>عمر البناء (سنة)</label>
-                <input value={reAge} onChange={e => setReAge(e.target.value)} type="number" placeholder="0" style={inputStyle} />
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>نوع الملكية</label>
-              <select value={reOwnership} onChange={e => setReOwnership(e.target.value)} style={selectStyle}>
-                <option value="">اختر</option>
-                {OWNERSHIP_TYPES.map(o => <option key={o} value={o}>{o}</option>)}
-              </select>
-            </div>
-
-            {/* Price + Hide Toggle for RE */}
-            <div style={{ background: hidePrice ? "#fffbeb" : "#f0fdf4", border: `2px solid ${hidePrice ? "#f59e0b" : "#16a34a"}`, borderRadius: 14, padding: "14px 16px", marginBottom: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <div style={{ fontWeight: "700", fontSize: 13, color: "#1e293b" }}>
-                  {hidePrice ? "💬 الاستفسار عبر واتساب" : "💰 عرض السعر"}
-                </div>
-                <div onClick={() => setHidePrice(!hidePrice)} style={{ width: 48, height: 26, borderRadius: 13, background: hidePrice ? "#f59e0b" : "#e2e8f0", position: "relative", cursor: "pointer", flexShrink: 0 }}>
-                  <div style={{ width: 20, height: 20, borderRadius: "50%", background: "white", position: "absolute", top: 3, left: hidePrice ? 25 : 3, transition: "left 0.2s", boxShadow: "0 1px 4px rgba(0,0,0,0.2)" }} />
-                </div>
-              </div>
-              {!hidePrice && (
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input value={price} onChange={e => setPrice(e.target.value)} type="number" placeholder="السعر *" style={{ ...inputStyle, flex: 1 }} />
-                  <select value={currency} onChange={e => setCurrency(e.target.value)} style={{ background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "11px 8px", fontSize: 14, fontFamily: "inherit", outline: "none", cursor: "pointer" }}>
-                    <option value="IQD">د.ع</option>
-                    <option value="USD">$</option>
-                  </select>
-                </div>
-              )}
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>رقم التواصل *</label>
-              <input value={contactPhone} onChange={e => setContactPhone(e.target.value)} type="tel" placeholder="07X XXXX XXXX" style={{ ...inputStyle, direction: "ltr" }} />
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>ملاحظات إضافية</label>
-              <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={3} style={{ ...inputStyle, resize: "none" }} placeholder="أي تفاصيل إضافية..." />
-            </div>
-
-            <div onClick={() => setNegotiable(!negotiable)} style={{ display: "flex", alignItems: "center", gap: 10, background: negotiable ? "#f0fdf4" : "#f8fafc", border: `1.5px solid ${negotiable ? "#16a34a" : "#e2e8f0"}`, borderRadius: 12, padding: "12px 14px", marginBottom: 4, cursor: "pointer" }}>
-              <div style={{ width: 20, height: 20, borderRadius: 6, border: `2px solid ${negotiable ? "#16a34a" : "#cbd5e1"}`, background: negotiable ? "#16a34a" : "white", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                {negotiable && <span style={{ color: "white", fontSize: 13 }}>✓</span>}
-              </div>
-              <span style={{ fontSize: 13, color: "#374151", fontWeight: "600" }}>السعر قابل للتفاوض</span>
-            </div>
-          </>
-        )}
-
-        {/* ===== SERVICE FORM ===== */}
-        {listingType === "service" && (
-          <>
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>نوع الخدمة *</label>
-              <select value={serviceType} onChange={e => setServiceType(e.target.value)} style={selectStyle}>
-                <option value="">اختر نوع الخدمة</option>
-                {["تصوير وإنتاج", "تنظيم حفلات", "تدريس وكورسات", "صيانة منزلية", "تجميل وحلاقة", "عيادة وطب", "توصيل ونقل", "تصميم جرافيك", "برمجة ومواقع", "خياطة وتفصيل", "طبخ وكيترينغ", "تنظيف منازل", "أخرى"].map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-              <div>
-                <label style={labelStyle}>المدينة</label>
-                <select value={serviceCity} onChange={e => setServiceCity(e.target.value)} style={selectStyle}>
-                  <option value="">اختر</option>
-                  {IRAQI_CITIES.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={labelStyle}>منطقة العمل</label>
-                <input value={serviceArea} onChange={e => setServiceArea(e.target.value)} placeholder="المنصور، الكرادة..." style={inputStyle} />
-              </div>
-            </div>
-
-            {/* Price Toggle for Service */}
-            <div style={{ background: hidePrice ? "#fffbeb" : "#f0fdf4", border: `2px solid ${hidePrice ? "#f59e0b" : "#16a34a"}`, borderRadius: 14, padding: "14px 16px", marginBottom: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <div style={{ fontWeight: "700", fontSize: 13 }}>{hidePrice ? "💬 الاستفسار عبر واتساب" : "💰 السعر يبدأ من"}</div>
-                <div onClick={() => setHidePrice(!hidePrice)} style={{ width: 48, height: 26, borderRadius: 13, background: hidePrice ? "#f59e0b" : "#e2e8f0", position: "relative", cursor: "pointer", flexShrink: 0 }}>
-                  <div style={{ width: 20, height: 20, borderRadius: "50%", background: "white", position: "absolute", top: 3, left: hidePrice ? 25 : 3, transition: "left 0.2s", boxShadow: "0 1px 4px rgba(0,0,0,0.2)" }} />
-                </div>
-              </div>
-              {!hidePrice && (
-                <div style={{ display: "flex", gap: 8 }}>
-                  <input value={price} onChange={e => setPrice(e.target.value)} type="number" placeholder="0" style={{ ...inputStyle, flex: 1 }} />
-                  <select value={currency} onChange={e => setCurrency(e.target.value)} style={{ background: "#f8fafc", border: "1.5px solid #e2e8f0", borderRadius: 10, padding: "11px 8px", fontSize: 14, fontFamily: "inherit", outline: "none" }}>
-                    <option value="IQD">د.ع</option>
-                    <option value="USD">$</option>
-                  </select>
-                </div>
-              )}
-            </div>
-
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>أوقات العمل</label>
-              <input value={serviceHours} onChange={e => setServiceHours(e.target.value)} placeholder="9 صباحاً - 9 مساءً" style={inputStyle} />
-            </div>
-            <div style={{ marginBottom: 14 }}>
-              <label style={labelStyle}>رقم التواصل *</label>
-              <input value={contactPhone} onChange={e => setContactPhone(e.target.value)} type="tel" placeholder="07X XXXX XXXX" style={{ ...inputStyle, direction: "ltr" }} />
-            </div>
-            <div style={{ marginBottom: 16 }}>
-              <label style={labelStyle}>وصف الخدمة</label>
-              <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={4} style={{ ...inputStyle, resize: "none" }} placeholder="اكتب وصفاً مفصلاً للخدمة..." />
-            </div>
-          </>
-        )}
-
-        {error && <div style={{ background: "#fef2f2", color: "#dc2626", borderRadius: 10, padding: "10px 14px", fontSize: 13, marginBottom: 14 }}>{error}</div>}
-
-        {/* BUTTONS */}
-        <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-          {listingType === "product" && step > 1 && (
-            <button onClick={() => setStep(step - 1)} style={{ background: "#f1f5f9", color: "#64748b", border: "none", borderRadius: 14, padding: "14px 20px", fontWeight: "700", fontSize: 15, cursor: "pointer", fontFamily: "inherit" }}>←</button>
-          )}
-          {listingType === "product" && step < maxSteps ? (
-            <button onClick={() => setStep(step + 1)} style={{ flex: 1, background: "#0f172a", color: "white", border: "none", borderRadius: 14, padding: "14px", fontWeight: "800", fontSize: 15, cursor: "pointer", fontFamily: "inherit" }}>
-              التالي →
-            </button>
+          {filtered.length === 0 ? (
+            <div className="sd-state">📦 لا توجد منتجات — ابدأ بالإضافة!</div>
           ) : (
-            <button onClick={handleSave} disabled={saving} style={{ flex: 1, background: saving ? "#94a3b8" : "#16a34a", color: "white", border: "none", borderRadius: 14, padding: "14px", fontWeight: "800", fontSize: 15, cursor: saving ? "not-allowed" : "pointer", fontFamily: "inherit" }}>
-              {saving ? "⏳ جاري الحفظ..." : "✅ حفظ المنتج"}
-            </button>
+            filtered.map((p) => (
+              <div key={p.id} className="sd-item">
+                <div className="sd-item-img">
+                  {firstImg(p) ? <img src={firstImg(p)} alt="" /> : <span>🖼️</span>}
+                </div>
+                <div className="sd-item-info">
+                  <div className="sd-item-name">
+                    {p.name || p.title}
+                    {p.sku && <span className="sd-item-sku"> {p.sku}#</span>}
+                  </div>
+                  <div className="sd-item-price">
+                    {p.hide_price
+                      ? '🔒 السعر مخفي (واتساب)'
+                      : `${Number(p.price || 0).toLocaleString('en-US')} ${p.currency === 'USD' ? '$' : 'د.ع'}`}
+                  </div>
+                </div>
+                <div className="sd-item-actions">
+                  <button onClick={() => startEdit(p)} title="تعديل">✏️</button>
+                  <button onClick={() => remove(p)} title="حذف">🗑️</button>
+                </div>
+              </div>
+            ))
           )}
         </div>
-      </div>
+      )}
     </div>
-  );
+  )
 }
 
-// ============================================================
-// ORDER MODAL
-// ============================================================
-function OrderModal({ ar, order, onClose, onUpdate, showNotif }) {
-  const s = STATUS_CONFIG[order.status] || STATUS_CONFIG.new;
-  const [updating, setUpdating] = useState(false);
-
-  const updateStatus = async (newStatus) => {
-    setUpdating(true);
-    await supabase.from("orders").update({ status: newStatus }).eq("id", order.id);
-    setUpdating(false);
-    showNotif("✅ تم تحديث الحالة");
-    onUpdate();
-  };
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "flex-end" }}>
-      <div dir="rtl" style={{ background: "white", borderRadius: "24px 24px 0 0", width: "100%", padding: "20px 16px 50px", fontFamily: "Tajawal,sans-serif" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: 17, fontWeight: "800", color: "#1e293b" }}>تفاصيل الطلب</h3>
-            {order.sku && <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>#{order.sku}</div>}
-          </div>
-          <button onClick={onClose} style={{ background: "#f1f5f9", border: "none", borderRadius: 8, width: 32, height: 32, fontSize: 18, cursor: "pointer" }}>✕</button>
-        </div>
-        <div style={{ background: "#f8fafc", borderRadius: 14, padding: "14px", marginBottom: 16 }}>
-          {[["العميل", order.customer_name || "-"], ["الهاتف", order.customer_phone || "-"], ["العنوان", order.delivery_address || "-"], ["المجموع", `${(order.total || 0).toLocaleString()} د.ع`]].map(([k, v]) => (
-            <div key={k} style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, fontSize: 13 }}>
-              <span style={{ color: "#64748b" }}>{k}</span>
-              <span style={{ fontWeight: "600", color: "#1e293b" }}>{v}</span>
-            </div>
-          ))}
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-            <span style={{ color: "#64748b" }}>الحالة</span>
-            <span style={{ background: s.bg, color: s.color, borderRadius: 6, padding: "2px 10px", fontSize: 12, fontWeight: "700" }}>{s.ar}</span>
-          </div>
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8, fontWeight: "600" }}>تحديث الحالة:</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {Object.entries(STATUS_CONFIG).map(([status, config]) => (
-              <button key={status} onClick={() => updateStatus(status)} disabled={updating || order.status === status} style={{ background: order.status === status ? "#0f172a" : "#f1f5f9", color: order.status === status ? "white" : "#374151", border: "none", borderRadius: 10, padding: "10px", fontSize: 12, cursor: "pointer", fontFamily: "inherit", fontWeight: "600" }}>
-                {config.ar}
-              </button>
-            ))}
-          </div>
-        </div>
-        {order.customer_phone && (
-          <a href={`https://wa.me/${order.customer_phone.replace(/\D/g, "")}`} style={{ display: "block", background: "#25D366", color: "white", borderRadius: 14, padding: "13px", fontWeight: "700", fontSize: 15, textDecoration: "none", textAlign: "center" }}>
-            💬 تواصل عبر واتساب
-          </a>
-        )}
-      </div>
-    </div>
-  );
+// ================= التنسيقات =================
+const CSS = `
+.sd-page {
+  min-height: 100vh;
+  background: #f6f7f9;
+  font-family: 'Tajawal', sans-serif;
+  padding-bottom: 60px;
 }
+.sd-header {
+  background: linear-gradient(135deg, #0A1D37, #14325c);
+  color: #fff;
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sd-store-name { color: #F5B93E; font-size: 21px; font-weight: 800; }
+.sd-store-type { color: #cbd5e1; font-size: 12.5px; margin-top: 2px; }
+.sd-view-store {
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(245,185,62,0.6);
+  color: #F5B93E;
+  padding: 8px 16px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.sd-msg {
+  max-width: 760px;
+  margin: 14px auto 0;
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.sd-msg.ok  { background: #ecfdf5; color: #067647; border: 1px solid #a7f3d0; }
+.sd-msg.err { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+.sd-state { text-align: center; padding: 50px 20px; color: #64748b; font-size: 16px; }
+
+.sd-list-wrap, .sd-form { max-width: 760px; margin: 16px auto 0; padding: 0 16px; }
+.sd-list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.sd-list-head h2 { font-size: 19px; color: #0A1D37; margin: 0; }
+.sd-add {
+  background: #F5B93E; color: #111; border: none;
+  border-radius: 11px; padding: 10px 18px;
+  font-size: 14px; font-weight: 800; cursor: pointer; font-family: inherit;
+}
+.sd-input {
+  width: 100%; box-sizing: border-box;
+  padding: 12px 14px; border-radius: 11px;
+  border: 1px solid #e2e8f0; background: #fff;
+  font-size: 14.5px; font-family: inherit; outline: none;
+  margin-bottom: 4px;
+}
+.sd-input:focus { border-color: #F5B93E; }
+.sd-search { margin-bottom: 14px; }
+
+.sd-item {
+  background: #fff; border-radius: 14px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 12px; margin-bottom: 10px;
+  box-shadow: 0 1px 4px rgba(10,29,55,.07);
+}
+.sd-item-img {
+  width: 62px; height: 62px; border-radius: 11px;
+  background: #f1f5f9; overflow: hidden; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 24px;
+}
+.sd-item-img img { width: 100%; height: 100%; object-fit: cover; }
+.sd-item-info { flex: 1; min-width: 0; }
+.sd-item-name { font-size: 14.5px; font-weight: 800; color: #0A1D37; }
+.sd-item-sku { color: #94a3b8; font-weight: 600; font-size: 12px; }
+.sd-item-price { font-size: 13.5px; color: #b48114; font-weight: 700; margin-top: 3px; }
+.sd-item-actions { display: flex; gap: 6px; }
+.sd-item-actions button {
+  background: #f1f5f9; border: none; border-radius: 9px;
+  width: 38px; height: 38px; font-size: 16px; cursor: pointer;
+}
+
+.sd-form { background: #fff; border-radius: 18px; padding: 18px; box-shadow: 0 2px 10px rgba(10,29,55,.08); }
+.sd-form-title { font-size: 18px; font-weight: 800; color: #0A1D37; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.sd-sku-preview {
+  background: #eff6ff; color: #1d4ed8;
+  font-size: 12.5px; font-weight: 700;
+  padding: 5px 12px; border-radius: 999px;
+}
+.sd-label { display: block; font-size: 13.5px; font-weight: 800; color: #334155; margin: 12px 0 6px; }
+.sd-row { display: flex; gap: 10px; }
+.sd-hint { font-size: 12.5px; color: #1d4ed8; background: #eff6ff; border-radius: 9px; padding: 8px 12px; margin-top: 6px; }
+
+.sd-cat-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.sd-cat {
+  border: 1.5px solid #e2e8f0; background: #fff;
+  border-radius: 999px; padding: 8px 14px;
+  font-size: 13.5px; cursor: pointer; font-family: inherit; color: #334155;
+}
+.sd-cat.active { background: #0A1D37; border-color: #0A1D37; color: #F5B93E; font-weight: 800; }
+
+.sd-toggle-box {
+  display: flex; gap: 12px; align-items: flex-start;
+  background: #fffbeb; border: 1px solid #fde68a;
+  border-radius: 13px; padding: 13px; margin-top: 14px;
+}
+.sd-toggle { position: relative; display: inline-block; width: 46px; height: 26px; flex-shrink: 0; margin-top: 2px; }
+.sd-toggle input { opacity: 0; width: 0; height: 0; }
+.sd-slider {
+  position: absolute; inset: 0; cursor: pointer;
+  background: #cbd5e1; border-radius: 999px; transition: .2s;
+}
+.sd-slider:before {
+  content: ""; position: absolute;
+  width: 20px; height: 20px; right: 3px; top: 3px;
+  background: #fff; border-radius: 50%; transition: .2s;
+}
+.sd-toggle input:checked + .sd-slider { background: #16a34a; }
+.sd-toggle input:checked + .sd-slider:before { transform: translateX(-20px); }
+.sd-toggle-title { font-size: 14px; font-weight: 800; color: #0A1D37; }
+.sd-toggle-sub { font-size: 12.5px; color: #64748b; margin-top: 3px; }
+
+.sd-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.sd-chip {
+  border: 1.5px solid #e2e8f0; background: #fff;
+  border-radius: 999px; padding: 7px 15px;
+  font-size: 13.5px; cursor: pointer; font-family: inherit; color: #334155;
+}
+.sd-chip.active { background: #F5B93E; border-color: #F5B93E; color: #111; font-weight: 800; }
+
+.sd-imgs { display: flex; flex-wrap: wrap; gap: 10px; }
+.sd-img-thumb { position: relative; width: 76px; height: 76px; border-radius: 12px; overflow: hidden; }
+.sd-img-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.sd-img-thumb button {
+  position: absolute; top: 3px; left: 3px;
+  width: 22px; height: 22px; border: none; border-radius: 50%;
+  background: rgba(0,0,0,.6); color: #fff; font-size: 11px; cursor: pointer;
+}
+.sd-img-add {
+  width: 76px; height: 76px; border-radius: 12px;
+  border: 2px dashed #cbd5e1; background: #f8fafc;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px; color: #94a3b8; cursor: pointer;
+}
+
+.sd-form-actions { display: flex; gap: 10px; margin-top: 20px; }
+.sd-save {
+  flex: 1; background: #16a34a; color: #fff;
+  border: none; border-radius: 12px; padding: 14px;
+  font-size: 15.5px; font-weight: 800; cursor: pointer; font-family: inherit;
+}
+.sd-save:disabled { opacity: .6; }
+.sd-cancel {
+  background: #f1f5f9; color: #334155;
+  border: none; border-radius: 12px; padding: 14px 22px;
+  font-size: 14.5px; font-weight: 700; cursor: pointer; font-family: inherit;
+}
+`

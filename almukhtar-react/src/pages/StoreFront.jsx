@@ -220,44 +220,37 @@ export default function StoreFront() {
     setLoading(true)
     setError(null)
 
-    // 1) جلب بيانات المتجر حسب الـ slug من الرابط
+    // 1) جلب بيانات المتجر حسب store_slug من الرابط
     let storeRow = null
     if (slug) {
-      const bySlug = await supabase.from('stores').select('*').eq('slug', slug).maybeSingle()
+      const bySlug = await supabase
+        .from('stores').select('*').eq('store_slug', slug).maybeSingle()
       if (bySlug.data) storeRow = bySlug.data
-      if (!storeRow) {
-        const byName = await supabase.from('stores').select('*').eq('name', slug).maybeSingle()
-        if (byName.data) storeRow = byName.data
-      }
     }
     setStore(storeRow)
 
-    // 2) جلب المنتجات — منتجات هذا المتجر فقط إن أمكن ربطها
-    let query = supabase.from('products').select('*').eq('is_active', true)
-    if (storeRow) {
-      const ownerIds = [storeRow.id, storeRow.user_id, storeRow.owner_id].filter(Boolean)
-      // نجرب الربط عبر store_id أولاً ثم seller_id ثم user_id
-      // (أول عمود موجود فعلاً هو اللي ينطبق — الباقي يتجاهله Supabase بالفلترة المتعددة)
-      if (storeRow.id) query = query.or(
-        `store_id.eq.${storeRow.id},seller_id.eq.${storeRow.user_id || storeRow.id},user_id.eq.${storeRow.user_id || storeRow.id}`
-      )
-    }
-    const { data, error } = await query.order('created_at', { ascending: false })
+    // 2) جلب كل المنتجات الفعالة ثم فلترة منتجات هذا المتجر
+    const { data, error } = await supabase
+      .from('products').select('*').eq('is_active', true)
+      .order('created_at', { ascending: false })
 
     if (error) {
-      // لو فشل الربط (عمود غير موجود) نرجع لكل المنتجات الفعالة
-      const fallback = await supabase
-        .from('products').select('*').eq('is_active', true)
-        .order('created_at', { ascending: false })
-      if (fallback.error) {
-        console.error(fallback.error)
-        setError('تعذر تحميل المنتجات، حاول تحديث الصفحة')
-      } else {
-        setProducts(fallback.data || [])
-      }
-    } else {
-      setProducts(data || [])
+      console.error(error)
+      setError('تعذر تحميل المنتجات، حاول تحديث الصفحة')
+      setLoading(false)
+      return
     }
+
+    let list = data || []
+    if (storeRow) {
+      const ids = [storeRow.id, storeRow.owner_id].filter(Boolean)
+      const mine = list.filter((p) =>
+        ids.includes(p.store_id) || ids.includes(p.seller_id) || ids.includes(p.user_id)
+      )
+      // المنتجات القديمة غير المربوطة بمتجر: نعرض الكل مؤقتاً بدل صفحة فارغة
+      if (mine.length > 0) list = mine
+    }
+    setProducts(list)
     setLoading(false)
   }
 
@@ -266,7 +259,7 @@ export default function StoreFront() {
   const T = THEMES[themeKey]
 
   const storeName =
-    store?.name || store?.store_name || (slug ? decodeURIComponent(slug) : 'المتجر')
+    store?.name_ar || store?.name_en || (slug ? decodeURIComponent(slug) : 'المتجر')
 
   // ===== الفئات: تُبنى فقط من الفئات الموجودة فعلاً بمنتجات هذا المتجر =====
   const cats = useMemo(() => {

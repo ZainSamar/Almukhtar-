@@ -1,26 +1,39 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { supabase } from '../lib/supabase.js'
 
-// ====== إعدادات عامة ======
-const EXCHANGE_RATE = 1500 // سعر صرف الدولار مقابل الدينار — عدّله حسب السوق
+// ============ إعدادات المتجر ============
+const STORE_NAME_EN = 'AZYAA SAMAR'
+const STORE_NAME_AR = 'أزياء سمر'
+const ANNOUNCEMENT = 'Delivery across Iraq | التوصيل لكافة محافظات العراق'
+const EXCHANGE_RATE = 1500 // سعر صرف الدولار — عدّله حسب السوق
 
+// صورة الهيرو — بدّل الرابط بصورة فستان/موديل من Supabase Storage أو أي رابط مباشر
+const HERO_IMAGE = ''
+
+// ألوان الهوية
+const NAVY = '#0A1D37'
+const GOLD = '#F5B93E'
+const LIGHTBLUE = '#3B82C4'
+const WA_GREEN = '#25D366'
+
+// الفئات — id يطابق قيمة category المحفوظة في قاعدة البيانات
 const CATEGORIES = [
   { id: 'all', label: 'الكل', icon: '🛍️' },
-  { id: 'clothes', label: 'ملابس وأزياء', icon: '👗' },
+  { id: 'clothes', label: 'الفساتين والأزياء', icon: '👗' },
+  { id: 'shoes', label: 'الأحذية', icon: '👠' },
+  { id: 'accessories', label: 'الإكسسوارات', icon: '💍' },
+  { id: 'beauty', label: 'العناية والجمال', icon: '💄' },
   { id: 'realestate', label: 'عقارات', icon: '🏠' },
   { id: 'services', label: 'خدمات', icon: '🛠️' },
-  { id: 'electronics', label: 'إلكترونيات', icon: '📱' },
-  { id: 'home', label: 'منزل وأثاث', icon: '🛋️' },
   { id: 'other', label: 'أخرى', icon: '📦' },
 ]
 
-// تنسيق السعر بالدينار العراقي
+// ============ أدوات مساعدة ============
 function formatIQD(n) {
   if (n === null || n === undefined || isNaN(n)) return ''
   return Number(n).toLocaleString('en-US') + ' د.ع'
 }
 
-// السعر النهائي للعرض (تحويل الدولار للدينار)
 function displayPrice(product) {
   const price = Number(product.price)
   if (!price) return ''
@@ -30,20 +43,7 @@ function displayPrice(product) {
   return formatIQD(price)
 }
 
-// استخراج أول صورة من المنتج (يدعم images JSONB أو image_url القديم)
-function firstImage(product) {
-  try {
-    if (Array.isArray(product.images) && product.images.length > 0) return product.images[0]
-    if (typeof product.images === 'string') {
-      const arr = JSON.parse(product.images)
-      if (Array.isArray(arr) && arr.length > 0) return arr[0]
-    }
-  } catch (e) { /* ignore */ }
-  return product.image_url || null
-}
-
-// كل صور المنتج
-function allImages(product) {
+function parseImages(product) {
   const imgs = []
   try {
     const arr = Array.isArray(product.images) ? product.images : JSON.parse(product.images || '[]')
@@ -53,27 +53,37 @@ function allImages(product) {
   return imgs
 }
 
-// رابط واتساب مع رسالة تلقائية تحتوي كود المنتج
-function whatsappLink(product) {
-  const phone = (product.contact_phone || '').replace(/[^0-9]/g, '')
-  const msg = encodeURIComponent(
-    `مرحباً 👋 أريد الاستفسار عن هذا المنتج:\n${product.name || product.title || ''}\nكود المنتج: ${product.sku || ''}`
-  )
-  return phone ? `https://wa.me/${phone}?text=${msg}` : null
+function parseVariants(product) {
+  let v = product.variants
+  try { if (typeof v === 'string') v = JSON.parse(v) } catch (e) { v = null }
+  return v && typeof v === 'object' ? v : null
 }
 
+function waLink(product, intent) {
+  const phone = (product.contact_phone || '').replace(/[^0-9]/g, '')
+  if (!phone) return null
+  const name = product.name || product.title || ''
+  const sku = product.sku ? `\nكود المنتج: ${product.sku}` : ''
+  const text =
+    intent === 'order'
+      ? `مرحباً 👋 أريد طلب هذا المنتج:\n${name}${sku}`
+      : `مرحباً 👋 أريد الاستفسار عن سعر هذا المنتج:\n${name}${sku}`
+  return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
+}
+
+// ============ المكوّن الرئيسي ============
 export default function StoreFront() {
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [search, setSearch] = useState('')
+  const [showSearch, setShowSearch] = useState(false)
   const [category, setCategory] = useState('all')
-  const [selected, setSelected] = useState(null) // المنتج المفتوح بنافذة التفاصيل
+  const [selected, setSelected] = useState(null)
   const [imgIndex, setImgIndex] = useState(0)
+  const gridRef = useRef(null)
 
-  useEffect(() => {
-    fetchProducts()
-  }, [])
+  useEffect(() => { fetchProducts() }, [])
 
   async function fetchProducts() {
     setLoading(true)
@@ -85,7 +95,7 @@ export default function StoreFront() {
       .order('created_at', { ascending: false })
     if (error) {
       console.error('fetch products error:', error)
-      setError('تعذر تحميل المنتجات، حاول تحديث الصفحة')
+      setError('تعذر تحميل المنتجات، حاولي تحديث الصفحة')
     } else {
       setProducts(data || [])
     }
@@ -110,99 +120,148 @@ export default function StoreFront() {
     setImgIndex(0)
   }
 
+  function scrollToProducts() {
+    gridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
   return (
-    <div dir="rtl" style={styles.page}>
-      {/* ====== الهيدر ====== */}
-      <header style={styles.header}>
-        <div style={styles.headerInner}>
-          <div style={styles.logoBox}>
-            <span style={styles.logoText}>المختار</span>
-            <span style={styles.logoSub}>سوقك العراقي الموثوق</span>
-          </div>
+    <div dir="rtl" style={s.page}>
+
+      {/* ===== شريط التنقل العلوي ===== */}
+      <nav style={s.nav}>
+        <div style={s.navSide}>
+          <button style={s.navIconBtn} aria-label="القائمة">☰</button>
         </div>
-      </header>
-
-      {/* ====== البحث ====== */}
-      <div style={styles.searchWrap}>
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="🔍 ابحث بالاسم أو رقم SKU..."
-          style={styles.searchInput}
-        />
-      </div>
-
-      {/* ====== الفئات ====== */}
-      <div style={styles.catRow}>
-        {CATEGORIES.map((c) => (
+        <div style={s.navCenter}>
+          <div style={s.logoEn}>{STORE_NAME_EN}</div>
+          <div style={s.logoAr}>{STORE_NAME_AR}</div>
+        </div>
+        <div style={{ ...s.navSide, justifyContent: 'flex-end', gap: 14 }}>
           <button
-            key={c.id}
-            onClick={() => setCategory(c.id)}
-            style={{
-              ...styles.catBtn,
-              ...(category === c.id ? styles.catBtnActive : {}),
-            }}
-          >
-            <span style={{ fontSize: 18 }}>{c.icon}</span> {c.label}
-          </button>
-        ))}
+            style={s.navIconBtn}
+            aria-label="بحث"
+            onClick={() => setShowSearch(!showSearch)}
+          >🔍</button>
+          <button style={s.navIconBtn} aria-label="السلة" onClick={scrollToProducts}>🛍️</button>
+        </div>
+      </nav>
+
+      {/* ===== شريط الإعلان ===== */}
+      <div style={s.announce}>{ANNOUNCEMENT}</div>
+
+      {/* ===== حقل البحث (ينفتح من أيقونة 🔍) ===== */}
+      {showSearch && (
+        <div style={s.searchWrap}>
+          <input
+            autoFocus
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="ابحثي بالاسم أو رقم SKU..."
+            style={s.searchInput}
+          />
+        </div>
+      )}
+
+      {/* ===== قسم الهيرو ===== */}
+      <section style={{
+        ...s.hero,
+        backgroundImage: HERO_IMAGE
+          ? `linear-gradient(rgba(10,29,55,0.25), rgba(10,29,55,0.45)), url(${HERO_IMAGE})`
+          : `linear-gradient(135deg, ${NAVY} 0%, #14325c 55%, #1d477e 100%)`,
+      }}>
+        <div style={s.heroCard}>
+          <div style={s.heroKicker}>وصلنا حديثاً ✨</div>
+          <h1 style={s.heroTitle}>أرقى الفساتين والأزياء لهذا الموسم</h1>
+          <button style={s.heroBtn} onClick={scrollToProducts}>تسوقي الآن</button>
+        </div>
+      </section>
+
+      {/* ===== الفئات الدائرية ===== */}
+      <div style={s.catRow}>
+        {CATEGORIES.map((c) => {
+          const active = category === c.id
+          return (
+            <button key={c.id} onClick={() => setCategory(c.id)} style={s.catItem}>
+              <span style={{
+                ...s.catCircle,
+                borderColor: active ? GOLD : '#e8dcc3',
+                background: active ? '#fff8e8' : '#fff',
+                boxShadow: active ? `0 0 0 2px ${GOLD}` : '0 1px 4px rgba(10,29,55,0.08)',
+              }}>{c.icon}</span>
+              <span style={{
+                ...s.catLabel,
+                color: active ? NAVY : '#5b6b80',
+                fontWeight: active ? 800 : 500,
+              }}>{c.label}</span>
+            </button>
+          )
+        })}
       </div>
 
-      {/* ====== المحتوى ====== */}
-      <main style={styles.main}>
-        {loading && <div style={styles.stateBox}>⏳ جاري تحميل المنتجات...</div>}
+      {/* ===== شبكة المنتجات ===== */}
+      <main ref={gridRef} style={s.main}>
+        {loading && <div style={s.stateBox}>⏳ جاري تحميل المنتجات...</div>}
 
         {error && (
-          <div style={{ ...styles.stateBox, color: '#dc2626' }}>
+          <div style={{ ...s.stateBox, color: '#dc2626' }}>
             {error}
             <br />
-            <button onClick={fetchProducts} style={styles.retryBtn}>إعادة المحاولة</button>
+            <button onClick={fetchProducts} style={s.retryBtn}>إعادة المحاولة</button>
           </div>
         )}
 
         {!loading && !error && filtered.length === 0 && (
-          <div style={styles.stateBox}>
-            📦 لا توجد منتجات حالياً
-            <div style={{ fontSize: 13, color: '#9ca3af', marginTop: 6 }}>
-              جرب فئة أخرى أو امسح كلمة البحث
-            </div>
+          <div style={s.stateBox}>
+            📦 لا توجد منتجات في هذه الفئة حالياً
           </div>
         )}
 
-        <div style={styles.grid}>
+        <div style={s.grid}>
           {filtered.map((p) => {
-            const img = firstImage(p)
+            const imgs = parseImages(p)
             const hidden = p.hide_price
-            const wa = whatsappLink(p)
+            const waInquire = waLink(p, 'inquire')
+            const waOrder = waLink(p, 'order')
             return (
-              <div key={p.id} style={styles.card} onClick={() => openProduct(p)}>
-                <div style={styles.cardImgBox}>
-                  {img ? (
-                    <img src={img} alt={p.name || ''} style={styles.cardImg} loading="lazy" />
+              <div key={p.id} style={s.card}>
+                <div style={s.cardImgBox} onClick={() => openProduct(p)}>
+                  {imgs[0] ? (
+                    <img src={imgs[0]} alt={p.name || ''} style={s.cardImg} loading="lazy" />
                   ) : (
-                    <div style={styles.noImg}>🖼️</div>
+                    <div style={s.noImg}>🖼️</div>
                   )}
-                  {p.sku && <span style={styles.skuBadge}>#{p.sku}</span>}
+                  {hidden && <span style={s.premiumBadge}>Premium ✦</span>}
                 </div>
-                <div style={styles.cardBody}>
-                  <div style={styles.cardName}>{p.name || p.title || 'منتج'}</div>
+                <div style={s.cardBody}>
+                  <div style={s.cardName} onClick={() => openProduct(p)}>
+                    {p.name || p.title || 'منتج'}
+                    {p.sku && <span style={s.cardSku}> | كود: {p.sku}</span>}
+                  </div>
+
                   {hidden ? (
-                    wa ? (
-                      <a
-                        href={wa}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        style={styles.waBtn}
-                      >
-                        💬 استفسر عن السعر
+                    // ===== بطاقة السعر الخاص (واتساب) =====
+                    waInquire ? (
+                      <a href={waInquire} target="_blank" rel="noopener noreferrer" style={s.waBtn}>
+                        <span style={s.waLogo}>✆</span> استفسر عن السعر
                       </a>
                     ) : (
-                      <span style={styles.askPrice}>اسأل عن السعر</span>
+                      <span style={s.askPrice}>اسألي عن السعر</span>
                     )
                   ) : (
-                    <div style={styles.price}>{displayPrice(p)}</div>
+                    // ===== بطاقة السعر العلني =====
+                    <>
+                      <div style={s.price}>{displayPrice(p)}</div>
+                      {waOrder ? (
+                        <a href={waOrder} target="_blank" rel="noopener noreferrer" style={s.cartBtn}>
+                          إضافة إلى السلة
+                        </a>
+                      ) : (
+                        <button style={s.cartBtn} onClick={() => openProduct(p)}>
+                          عرض المنتج
+                        </button>
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -211,26 +270,25 @@ export default function StoreFront() {
         </div>
       </main>
 
-      {/* ====== نافذة تفاصيل المنتج ====== */}
+      {/* ===== نافذة تفاصيل المنتج ===== */}
       {selected && (
-        <div style={styles.overlay} onClick={() => setSelected(null)}>
-          <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
-            <button style={styles.closeBtn} onClick={() => setSelected(null)}>✕</button>
+        <div style={s.overlay} onClick={() => setSelected(null)}>
+          <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+            <button style={s.closeBtn} onClick={() => setSelected(null)}>✕</button>
 
-            {/* الصور */}
             {(() => {
-              const imgs = allImages(selected)
+              const imgs = parseImages(selected)
               return (
                 <div>
-                  <div style={styles.modalImgBox}>
+                  <div style={s.modalImgBox}>
                     {imgs.length > 0 ? (
-                      <img src={imgs[imgIndex]} alt="" style={styles.modalImg} />
+                      <img src={imgs[imgIndex]} alt="" style={s.modalImg} />
                     ) : (
-                      <div style={styles.noImg}>🖼️</div>
+                      <div style={s.noImg}>🖼️</div>
                     )}
                   </div>
                   {imgs.length > 1 && (
-                    <div style={styles.thumbRow}>
+                    <div style={s.thumbRow}>
                       {imgs.map((im, i) => (
                         <img
                           key={i}
@@ -238,8 +296,8 @@ export default function StoreFront() {
                           alt=""
                           onClick={() => setImgIndex(i)}
                           style={{
-                            ...styles.thumb,
-                            border: i === imgIndex ? '2px solid #f59e0b' : '2px solid transparent',
+                            ...s.thumb,
+                            border: i === imgIndex ? `2px solid ${GOLD}` : '2px solid transparent',
                           }}
                         />
                       ))}
@@ -249,156 +307,248 @@ export default function StoreFront() {
               )
             })()}
 
-            <div style={{ padding: '4px 18px 18px' }}>
-              <div style={styles.modalTitle}>{selected.name || selected.title}</div>
-              {selected.sku && <div style={styles.modalSku}>كود المنتج: #{selected.sku}</div>}
+            <div style={{ padding: '6px 18px 20px' }}>
+              <div style={s.modalTitle}>{selected.name || selected.title}</div>
+              {selected.sku && <div style={s.modalSku}>كود المنتج: #{selected.sku}</div>}
 
-              {selected.hide_price ? null : (
-                <div style={{ ...styles.price, fontSize: 22, margin: '8px 0' }}>
+              {!selected.hide_price && (
+                <div style={{ ...s.price, fontSize: 22, margin: '10px 0' }}>
                   {displayPrice(selected)}
                 </div>
               )}
 
-              {selected.description && (
-                <p style={styles.desc}>{selected.description}</p>
-              )}
+              {selected.description && <p style={s.desc}>{selected.description}</p>}
 
-              {/* المقاسات والألوان */}
               {(() => {
-                let v = selected.variants
-                try { if (typeof v === 'string') v = JSON.parse(v) } catch (e) { v = null }
+                const v = parseVariants(selected)
                 if (!v) return null
                 return (
                   <div style={{ marginTop: 10 }}>
                     {Array.isArray(v.sizes) && v.sizes.length > 0 && (
-                      <div style={styles.variantRow}>
-                        <span style={styles.variantLabel}>المقاسات:</span>
-                        {v.sizes.map((s, i) => (
-                          <span key={i} style={styles.chip}>{s}</span>
-                        ))}
+                      <div style={s.variantRow}>
+                        <span style={s.variantLabel}>المقاسات:</span>
+                        {v.sizes.map((x, i) => <span key={i} style={s.chip}>{x}</span>)}
                       </div>
                     )}
                     {Array.isArray(v.colors) && v.colors.length > 0 && (
-                      <div style={styles.variantRow}>
-                        <span style={styles.variantLabel}>الألوان:</span>
-                        {v.colors.map((c, i) => (
-                          <span key={i} style={styles.chip}>{c}</span>
-                        ))}
+                      <div style={s.variantRow}>
+                        <span style={s.variantLabel}>الألوان:</span>
+                        {v.colors.map((x, i) => <span key={i} style={s.chip}>{x}</span>)}
                       </div>
                     )}
                   </div>
                 )
               })()}
 
-              {/* زر واتساب دائماً بالتفاصيل */}
-              {whatsappLink(selected) && (
+              {waLink(selected, selected.hide_price ? 'inquire' : 'order') && (
                 <a
-                  href={whatsappLink(selected)}
+                  href={waLink(selected, selected.hide_price ? 'inquire' : 'order')}
                   target="_blank"
                   rel="noopener noreferrer"
-                  style={{ ...styles.waBtn, display: 'block', textAlign: 'center', marginTop: 16, padding: '13px' }}
+                  style={{ ...s.waBtn, display: 'block', textAlign: 'center', marginTop: 16, padding: '14px' }}
                 >
-                  💬 تواصل مع البائع عبر واتساب
+                  <span style={s.waLogo}>✆</span> تواصلي مع البائع عبر واتساب
                 </a>
               )}
             </div>
           </div>
         </div>
       )}
+
+      {/* ===== شريط التنقل السفلي ===== */}
+      <footer style={s.bottomNav}>
+        <button style={s.bnItem} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+          <span style={s.bnIcon}>🏠</span><span style={s.bnLabel}>الرئيسية</span>
+        </button>
+        <button style={s.bnItem} onClick={scrollToProducts}>
+          <span style={s.bnIcon}>👗</span><span style={s.bnLabel}>المجموعات</span>
+        </button>
+        <button style={s.bnItem} onClick={() => { setShowSearch(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>
+          <span style={s.bnIcon}>🔍</span><span style={s.bnLabel}>بحث</span>
+        </button>
+        <button style={s.bnItem} onClick={scrollToProducts}>
+          <span style={s.bnIcon}>🛍️</span><span style={s.bnLabel}>السلة</span>
+        </button>
+        <button style={s.bnItem} onClick={scrollToProducts}>
+          <span style={s.bnIcon}>💬</span><span style={s.bnLabel}>الدعم</span>
+        </button>
+      </footer>
     </div>
   )
 }
 
-// ====== التنسيقات ======
-const styles = {
+// ============ التنسيقات ============
+const s = {
   page: {
     minHeight: '100vh',
-    background: '#f8fafc',
+    background: '#fdfdfb',
     fontFamily: "'Tajawal', sans-serif",
-    paddingBottom: 60,
+    paddingBottom: 90,
   },
-  header: {
-    background: 'linear-gradient(135deg, #0f172a, #1e293b)',
-    padding: '18px 16px',
+
+  // --- شريط التنقل ---
+  nav: {
+    background: NAVY,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '12px 16px',
+    position: 'sticky',
+    top: 0,
+    zIndex: 50,
   },
-  headerInner: { maxWidth: 1100, margin: '0 auto' },
-  logoBox: { display: 'flex', flexDirection: 'column', gap: 2 },
-  logoText: { color: '#f59e0b', fontSize: 26, fontWeight: 800 },
-  logoSub: { color: '#cbd5e1', fontSize: 13 },
-  searchWrap: { maxWidth: 1100, margin: '16px auto 0', padding: '0 16px' },
+  navSide: { display: 'flex', alignItems: 'center', flex: 1 },
+  navCenter: { textAlign: 'center', flex: 2 },
+  logoEn: {
+    color: GOLD,
+    fontSize: 19,
+    fontWeight: 800,
+    letterSpacing: 3,
+  },
+  logoAr: { color: '#cbd5e1', fontSize: 12, marginTop: 1 },
+  navIconBtn: {
+    background: 'none',
+    border: 'none',
+    color: '#fff',
+    fontSize: 20,
+    cursor: 'pointer',
+    padding: 4,
+  },
+
+  // --- شريط الإعلان ---
+  announce: {
+    background: LIGHTBLUE,
+    color: '#fff',
+    textAlign: 'center',
+    fontSize: 12.5,
+    padding: '7px 12px',
+    letterSpacing: 0.3,
+  },
+
+  // --- البحث ---
+  searchWrap: { padding: '12px 16px 0', maxWidth: 1100, margin: '0 auto' },
   searchInput: {
     width: '100%',
-    padding: '13px 16px',
-    borderRadius: 14,
-    border: '1px solid #e2e8f0',
+    padding: '12px 16px',
+    borderRadius: 12,
+    border: `1.5px solid ${GOLD}`,
     fontSize: 15,
     outline: 'none',
     fontFamily: 'inherit',
     boxSizing: 'border-box',
     background: '#fff',
   },
-  catRow: {
-    maxWidth: 1100,
-    margin: '12px auto 0',
-    padding: '0 16px',
+
+  // --- الهيرو ---
+  hero: {
+    minHeight: 300,
+    backgroundSize: 'cover',
+    backgroundPosition: 'center top',
     display: 'flex',
-    gap: 8,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    padding: '40px 20px 28px',
+  },
+  heroCard: {
+    background: 'rgba(255,255,255,0.96)',
+    borderRadius: 18,
+    padding: '20px 26px',
+    textAlign: 'center',
+    maxWidth: 420,
+    width: '100%',
+    boxShadow: '0 8px 30px rgba(10,29,55,0.25)',
+  },
+  heroKicker: { color: '#b8860b', fontSize: 13, fontWeight: 700, letterSpacing: 0.5 },
+  heroTitle: {
+    color: NAVY,
+    fontSize: 21,
+    fontWeight: 800,
+    margin: '8px 0 16px',
+    lineHeight: 1.5,
+  },
+  heroBtn: {
+    background: LIGHTBLUE,
+    color: '#fff',
+    border: 'none',
+    borderRadius: 12,
+    padding: '12px 38px',
+    fontSize: 16,
+    fontWeight: 800,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+
+  // --- الفئات الدائرية ---
+  catRow: {
+    display: 'flex',
+    gap: 14,
     overflowX: 'auto',
     WebkitOverflowScrolling: 'touch',
+    padding: '18px 16px 6px',
+    maxWidth: 1100,
+    margin: '0 auto',
   },
-  catBtn: {
+  catItem: {
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
     display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
     gap: 6,
-    padding: '8px 14px',
-    borderRadius: 999,
-    border: '1px solid #e2e8f0',
-    background: '#fff',
-    color: '#334155',
-    fontSize: 14,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
     fontFamily: 'inherit',
+    flexShrink: 0,
+    padding: 0,
   },
-  catBtnActive: {
-    background: '#f59e0b',
-    borderColor: '#f59e0b',
-    color: '#fff',
-    fontWeight: 700,
+  catCircle: {
+    width: 62,
+    height: 62,
+    borderRadius: '50%',
+    border: '2px solid',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: 26,
+    transition: 'all 0.15s',
   },
-  main: { maxWidth: 1100, margin: '18px auto 0', padding: '0 16px' },
-  stateBox: {
-    textAlign: 'center',
-    padding: '50px 20px',
-    color: '#64748b',
-    fontSize: 16,
-  },
+  catLabel: { fontSize: 12 },
+
+  // --- المحتوى ---
+  main: { maxWidth: 1100, margin: '14px auto 0', padding: '0 16px', scrollMarginTop: 70 },
+  stateBox: { textAlign: 'center', padding: '50px 20px', color: '#64748b', fontSize: 16 },
   retryBtn: {
     marginTop: 12,
-    padding: '9px 22px',
+    padding: '10px 24px',
     borderRadius: 10,
     border: 'none',
-    background: '#f59e0b',
-    color: '#fff',
+    background: GOLD,
+    color: NAVY,
     fontSize: 14,
+    fontWeight: 800,
     cursor: 'pointer',
     fontFamily: 'inherit',
   },
+
+  // --- الشبكة (عمودين على الموبايل) ---
   grid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(165px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(158px, 1fr))',
     gap: 14,
   },
   card: {
     background: '#fff',
     borderRadius: 16,
     overflow: 'hidden',
-    boxShadow: '0 1px 4px rgba(15,23,42,0.08)',
-    cursor: 'pointer',
+    boxShadow: '0 2px 8px rgba(10,29,55,0.07)',
     display: 'flex',
     flexDirection: 'column',
   },
-  cardImgBox: { position: 'relative', aspectRatio: '1 / 1', background: '#f1f5f9' },
+  cardImgBox: {
+    position: 'relative',
+    aspectRatio: '3 / 4',
+    background: '#f4f2ee',
+    cursor: 'pointer',
+  },
   cardImg: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
   noImg: {
     width: '100%',
@@ -408,45 +558,83 @@ const styles = {
     justifyContent: 'center',
     fontSize: 40,
     color: '#cbd5e1',
-    minHeight: 140,
+    minHeight: 160,
   },
-  skuBadge: {
+  premiumBadge: {
     position: 'absolute',
-    top: 8,
-    right: 8,
-    background: 'rgba(15,23,42,0.75)',
-    color: '#fff',
-    fontSize: 11,
-    padding: '3px 8px',
-    borderRadius: 8,
+    top: 10,
+    right: 10,
+    background: NAVY,
+    color: GOLD,
+    fontSize: 10.5,
+    fontWeight: 800,
+    padding: '4px 10px',
+    borderRadius: 999,
+    letterSpacing: 0.5,
   },
-  cardBody: { padding: '10px 12px 12px', display: 'flex', flexDirection: 'column', gap: 6 },
+  cardBody: {
+    padding: '10px 12px 14px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    flex: 1,
+  },
   cardName: {
-    fontSize: 14,
+    fontSize: 13.5,
     fontWeight: 700,
-    color: '#0f172a',
-    lineHeight: 1.4,
+    color: NAVY,
+    lineHeight: 1.5,
+    cursor: 'pointer',
     overflow: 'hidden',
     display: '-webkit-box',
     WebkitLineClamp: 2,
     WebkitBoxOrient: 'vertical',
   },
-  price: { color: '#f59e0b', fontWeight: 800, fontSize: 16 },
-  askPrice: { color: '#64748b', fontSize: 13 },
-  waBtn: {
-    background: '#25D366',
-    color: '#fff',
-    padding: '8px 10px',
+  cardSku: { color: '#8a97a8', fontWeight: 500, fontSize: 12 },
+  price: { color: NAVY, fontWeight: 800, fontSize: 16.5 },
+
+  // --- زر السلة الذهبي ---
+  cartBtn: {
+    display: 'block',
+    width: '100%',
+    background: GOLD,
+    color: '#111',
+    border: 'none',
     borderRadius: 10,
-    fontSize: 13,
-    fontWeight: 700,
+    padding: '10px 8px',
+    fontSize: 13.5,
+    fontWeight: 800,
+    cursor: 'pointer',
+    textAlign: 'center',
+    textDecoration: 'none',
+    fontFamily: 'inherit',
+    marginTop: 'auto',
+    boxSizing: 'border-box',
+  },
+
+  // --- زر واتساب الأخضر ---
+  waBtn: {
+    display: 'block',
+    width: '100%',
+    background: WA_GREEN,
+    color: '#fff',
+    borderRadius: 10,
+    padding: '10px 8px',
+    fontSize: 13.5,
+    fontWeight: 800,
     textDecoration: 'none',
     textAlign: 'center',
+    marginTop: 'auto',
+    boxSizing: 'border-box',
   },
+  waLogo: { fontSize: 15, marginLeft: 5 },
+  askPrice: { color: '#64748b', fontSize: 13 },
+
+  // --- نافذة التفاصيل ---
   overlay: {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(15,23,42,0.55)',
+    background: 'rgba(10,29,55,0.6)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -471,12 +659,12 @@ const styles = {
     height: 34,
     borderRadius: '50%',
     border: 'none',
-    background: 'rgba(15,23,42,0.65)',
+    background: 'rgba(10,29,55,0.7)',
     color: '#fff',
     fontSize: 16,
     cursor: 'pointer',
   },
-  modalImgBox: { width: '100%', aspectRatio: '1 / 1', background: '#f1f5f9' },
+  modalImgBox: { width: '100%', aspectRatio: '3 / 4', background: '#f4f2ee' },
   modalImg: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
   thumbRow: { display: 'flex', gap: 8, padding: '10px 18px 0', overflowX: 'auto' },
   thumb: {
@@ -487,17 +675,45 @@ const styles = {
     cursor: 'pointer',
     flexShrink: 0,
   },
-  modalTitle: { fontSize: 19, fontWeight: 800, color: '#0f172a', marginTop: 12 },
+  modalTitle: { fontSize: 19, fontWeight: 800, color: NAVY, marginTop: 12 },
   modalSku: { fontSize: 13, color: '#64748b', marginTop: 4 },
   desc: { fontSize: 14, color: '#334155', lineHeight: 1.7, marginTop: 10, whiteSpace: 'pre-wrap' },
   variantRow: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 },
   variantLabel: { fontSize: 13, color: '#64748b', fontWeight: 700 },
   chip: {
-    background: '#f1f5f9',
-    border: '1px solid #e2e8f0',
+    background: '#fff8e8',
+    border: `1px solid ${GOLD}`,
     borderRadius: 999,
     padding: '4px 12px',
     fontSize: 13,
-    color: '#0f172a',
+    color: NAVY,
+    fontWeight: 700,
   },
+
+  // --- شريط التنقل السفلي ---
+  bottomNav: {
+    position: 'fixed',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    background: NAVY,
+    display: 'flex',
+    justifyContent: 'space-around',
+    padding: '8px 4px 10px',
+    zIndex: 60,
+    boxShadow: '0 -3px 12px rgba(10,29,55,0.3)',
+  },
+  bnItem: {
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 3,
+    fontFamily: 'inherit',
+    padding: '2px 8px',
+  },
+  bnIcon: { fontSize: 19 },
+  bnLabel: { color: GOLD, fontSize: 10.5, fontWeight: 700 },
 }

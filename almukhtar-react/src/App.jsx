@@ -4,7 +4,7 @@ import Auth from './pages/Auth.jsx'
 import SellerDashboard from './pages/SellerDashboard.jsx'
 import Store from './pages/Store.jsx'
 import Terms from './pages/Terms.jsx'
-
+import StoreFront from './pages/StoreFront.jsx'
 function App() {
   return (
     <BrowserRouter>
@@ -15,6 +15,8 @@ function App() {
         <Route path="/dashboard" element={<SellerDashboard />} />
         <Route path="/store" element={<Store />} />
         <Route path="/terms" element={<Terms />} />
+        <Route path="/store" element={<StoreFront />} />
+        <Route path="/store/:slug" element={<StoreFront />} />
       </Routes>
     </BrowserRouter>
   )

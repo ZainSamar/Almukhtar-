@@ -15,8 +15,7 @@ function App() {
         <Route path="/dashboard" element={<SellerDashboard />} />
         <Route path="/store" element={<Store />} />
         <Route path="/terms" element={<Terms />} />
-        <Route path="/store" element={<StoreFront />} />
-        <Route path="/store/:slug" element={<StoreFront />} />
+         <Route path="/store/:slug" element={<StoreFront />} />
       </Routes>
     </BrowserRouter>
   )

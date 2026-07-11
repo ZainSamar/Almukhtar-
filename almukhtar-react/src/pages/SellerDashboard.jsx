@@ -140,7 +140,6 @@ export default function SellerDashboard() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { window.location.href = '/login'; return }
     setUser(user)
-
     const { data: storeRow } = await supabase
       .from('stores').select('*').eq('owner_id', user.id).maybeSingle()
     if (!storeRow || !storeRow.is_setup_complete) {

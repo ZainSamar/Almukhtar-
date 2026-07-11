@@ -137,12 +137,21 @@ export default function SellerDashboard() {
 
   async function init() {
     setLoading(true)
-   const { data: storeRow } = await supabase
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { window.location.href = '/login'; return }
+    setUser(user)
+
+    const { data: storeRow } = await supabase
       .from('stores').select('*').eq('owner_id', user.id).maybeSingle()
     if (!storeRow || !storeRow.is_setup_complete) {
       window.location.href = '/setup'
       return
     }
+    setStore(storeRow)
+
+    await fetchProducts(user, storeRow)
+    setLoading(false)
+  }
     setStore(storeRow)
 
     await fetchProducts(user, storeRow)

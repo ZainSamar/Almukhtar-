@@ -194,6 +194,35 @@ function waLink(product, intent, themeLabels) {
   return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`
 }
 
+// ===== حالة "مفتوح الآن" حسب ساعات العمل =====
+const DAY_NAMES = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']
+function isOpenNow(store) {
+  const wh = store?.working_hours
+  if (!wh || !Array.isArray(wh.days) || wh.days.length === 0 || !wh.from || !wh.to) return null
+  const now = new Date()
+  if (!wh.days.includes(DAY_NAMES[now.getDay()])) return false
+  const [fh, fm] = wh.from.split(':').map(Number)
+  const [th, tm] = wh.to.split(':').map(Number)
+  const mins = now.getHours() * 60 + now.getMinutes()
+  const from = fh * 60 + (fm || 0)
+  const to = th * 60 + (tm || 0)
+  return to > from ? mins >= from && mins <= to : mins >= from || mins <= to
+}
+
+// ===== روابط التواصل الاجتماعي =====
+const SOCIAL_ICONS = {
+  facebook: '📘', instagram: '📸', tiktok: '🎵',
+  telegram: '✈️', snapchat: '👻', youtube: '▶️', x: '✖️',
+}
+
+// رابط واتساب المتجر نفسه (استفسار عام)
+function storeWaLink(store) {
+  const phone = (store?.whatsapp || store?.phone || '').replace(/[^0-9]/g, '')
+  if (!phone) return null
+  const text = encodeURIComponent(`مرحباً 👋 وصلتكم من صفحة متجركم "${store.name_ar || ''}" على المختار`)
+  return `https://wa.me/${phone}?text=${text}`
+}
+
 const WaIcon = () => (
   <svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" style={{ verticalAlign: '-3px', marginLeft: 6 }}>
     <path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm5.4 14.1c-.2.6-1.2 1.2-1.7 1.2-.4.1-1 .1-1.6-.1-.4-.1-.9-.3-1.5-.6-2.6-1.1-4.3-3.8-4.4-4-.1-.2-1.1-1.4-1.1-2.7 0-1.3.7-1.9.9-2.2.2-.3.5-.3.7-.3h.5c.2 0 .4 0 .6.5.2.6.8 1.9.8 2 .1.1.1.3 0 .5-.1.2-.1.3-.3.5l-.4.5c-.1.1-.3.3-.1.6.2.3.8 1.3 1.7 2.1 1.2 1 2.1 1.4 2.4 1.5.3.1.5.1.6-.1.2-.2.7-.8.9-1.1.2-.3.4-.2.6-.1.3.1 1.6.8 1.9.9.3.2.5.2.5.4.1.1.1.7-.1 1.3Z"/>
@@ -329,14 +358,96 @@ export default function StoreFront() {
         </div>
       )}
 
-      {/* ===== الهيرو ===== */}
-      <section className="sf-hero">
-        <div className="sf-hero-inner">
-          <div className="sf-hero-kicker">{T.heroKicker}</div>
-          <h1 className="sf-hero-title">{T.heroTitle}</h1>
-          <button className="sf-hero-cta" onClick={scrollToProducts}>{T.heroCta}</button>
-        </div>
-      </section>
+      {/* ===== هوية المتجر (غلاف + شعار + أزرار) ===== */}
+      {store ? (
+        <section className="sf-profile">
+          <div className="sf-cover">
+            {store.cover_url
+              ? <img src={store.cover_url} alt="" />
+              : <div className="sf-cover-fallback" />}
+          </div>
+          <div className="sf-profile-body">
+            <div className="sf-profile-top">
+              <div className="sf-plogo">
+                {store.logo_url
+                  ? <img src={store.logo_url} alt="" />
+                  : <span>🏪</span>}
+              </div>
+              <div className="sf-pinfo">
+                <div className="sf-pname">
+                  {store.name_ar || store.name_en}
+                  {(() => {
+                    const open = isOpenNow(store)
+                    if (open === null) return null
+                    return (
+                      <span className={`sf-popen ${open ? 'yes' : 'no'}`}>
+                        {open ? '● مفتوح الآن' : '● مغلق'}
+                      </span>
+                    )
+                  })()}
+                </div>
+                {store.description && <div className="sf-pdesc">{store.description}</div>}
+                <div className="sf-pmeta">
+                  {store.show_location !== false && (store.province || store.city) && (
+                    <span>📍 {[store.province, store.city, store.area].filter(Boolean).join('، ')}</span>
+                  )}
+                  {store.working_hours?.from && store.working_hours?.to && (
+                    <span>🕐 {store.working_hours.from} - {store.working_hours.to}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* أزرار التواصل */}
+            <div className="sf-pactions">
+              {storeWaLink(store) && (
+                <a href={storeWaLink(store)} target="_blank" rel="noopener noreferrer" className="sf-pact sf-pact-wa">
+                  <WaIcon /> واتساب
+                </a>
+              )}
+              {store.phone && (
+                <a href={`tel:${store.phone}`} className="sf-pact">📞 اتصال</a>
+              )}
+              <button
+                className="sf-pact"
+                onClick={async () => {
+                  const url = window.location.href
+                  const title = store.name_ar || 'متجر على المختار'
+                  try {
+                    if (navigator.share) await navigator.share({ title, url })
+                    else {
+                      await navigator.clipboard.writeText(url)
+                      alert('✅ تم نسخ رابط المتجر')
+                    }
+                  } catch (e) { /* المستخدم ألغى المشاركة */ }
+                }}
+              >🔗 مشاركة</button>
+            </div>
+
+            {/* روابط التواصل الاجتماعي */}
+            {store.socials && Object.entries(store.socials).some(([, v]) => v) && (
+              <div className="sf-socials">
+                {Object.entries(store.socials).map(([id, url]) =>
+                  url ? (
+                    <a key={id} href={url} target="_blank" rel="noopener noreferrer" className="sf-social" title={id}>
+                      {SOCIAL_ICONS[id] || '🔗'}
+                    </a>
+                  ) : null
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+      ) : (
+        /* الهيرو العام عند عدم وجود متجر */
+        <section className="sf-hero">
+          <div className="sf-hero-inner">
+            <div className="sf-hero-kicker">{T.heroKicker}</div>
+            <h1 className="sf-hero-title">{T.heroTitle}</h1>
+            <button className="sf-hero-cta" onClick={scrollToProducts}>{T.heroCta}</button>
+          </div>
+        </section>
+      )}
 
       {/* ===== الفئات (فقط الموجودة فعلاً بهذا المتجر) ===== */}
       {cats.length > 1 && (
@@ -542,6 +653,60 @@ const CSS = `
   box-sizing: border-box;
   background: #fff;
 }
+
+/* ---- هوية المتجر ---- */
+.sf-profile { background: #fff; padding-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+.sf-cover { height: 160px; overflow: hidden; }
+.sf-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sf-cover-fallback {
+  width: 100%; height: 100%;
+  background:
+    radial-gradient(ellipse at 80% 20%, rgba(255,255,255,0.12), transparent 55%),
+    linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 60%, #3a5a8c));
+}
+.sf-profile-body { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+.sf-profile-top { display: flex; gap: 14px; margin-top: -34px; position: relative; }
+.sf-plogo {
+  width: 84px; height: 84px; border-radius: 50%;
+  background: #fff; border: 4px solid #fff;
+  box-shadow: 0 4px 14px rgba(0,0,0,.18);
+  overflow: hidden; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 34px;
+}
+.sf-plogo img { width: 100%; height: 100%; object-fit: cover; }
+.sf-pinfo { padding-top: 40px; min-width: 0; }
+.sf-pname {
+  font-size: 20px; font-weight: 800; color: var(--primary);
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.sf-popen { font-size: 11.5px; font-weight: 800; padding: 4px 11px; border-radius: 999px; background: #f1f5f9; }
+.sf-popen.yes { color: #16a34a; background: #ecfdf5; }
+.sf-popen.no  { color: #94a3b8; }
+.sf-pdesc { font-size: 13.5px; color: #64748b; margin-top: 3px; }
+.sf-pmeta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: #94a3b8; margin-top: 6px; }
+
+.sf-pactions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.sf-pact {
+  flex: 1; min-width: 100px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--soft); color: var(--primary);
+  border: 1.5px solid var(--accent);
+  border-radius: 12px; padding: 11px 10px;
+  font-size: 13.5px; font-weight: 800;
+  text-decoration: none; cursor: pointer; font-family: inherit;
+  transition: transform .12s;
+}
+.sf-pact:hover { transform: translateY(-1px); }
+.sf-pact-wa { background: #25D366; border-color: #25D366; color: #fff; }
+
+.sf-socials { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.sf-social {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: #f1f5f9; display: flex; align-items: center; justify-content: center;
+  font-size: 18px; text-decoration: none;
+  transition: transform .12s;
+}
+.sf-social:hover { transform: translateY(-2px); }
 
 /* ---- الهيرو ---- */
 .sf-hero {

@@ -362,6 +362,13 @@ export default function SellerDashboard() {
             عرض متجري ↗
           </a>
         )}
+        <button
+          className="sd-view-store"
+          style={{ cursor: 'pointer', background: 'none', border: '1px solid rgba(255,255,255,0.25)', color: '#cbd5e1' }}
+          onClick={async () => { await supabase.auth.signOut(); window.location.href = '/' }}
+        >
+          خروج
+        </button>
       </header>
 
       {msg && <div className={`sd-msg ${msg.type}`}>{msg.text}</div>}

@@ -73,7 +73,26 @@ const AUDIENCES = [
   { id: 'boys', label: 'ولادي', icon: '👦' },
   { id: 'girls', label: 'بناتي', icon: '👧' },
 ]
-const COLOR_PRESETS = ['أسود', 'أبيض', 'أحمر', 'أزرق', 'أخضر', 'بيج', 'ذهبي', 'وردي']
+// قائمة الألوان الأساسية: اسم + لون حقيقي + رمز للـ SKU
+const COLOR_LIST = [
+  { name: 'أسود', hex: '#111111', code: 'BLK' },
+  { name: 'أبيض', hex: '#FFFFFF', code: 'WHT' },
+  { name: 'أحمر', hex: '#DC2626', code: 'RED' },
+  { name: 'أزرق', hex: '#2563EB', code: 'BLU' },
+  { name: 'أخضر', hex: '#16A34A', code: 'GRN' },
+  { name: 'أصفر', hex: '#EAB308', code: 'YLW' },
+  { name: 'برتقالي', hex: '#F97316', code: 'ORG' },
+  { name: 'وردي', hex: '#EC4899', code: 'PNK' },
+  { name: 'بنفسجي', hex: '#8B5CF6', code: 'PRP' },
+  { name: 'بني', hex: '#92400E', code: 'BRN' },
+  { name: 'رمادي', hex: '#6B7280', code: 'GRY' },
+  { name: 'بيج', hex: '#D6C7A1', code: 'BEG' },
+  { name: 'كحلي', hex: '#0A1D37', code: 'NVY' },
+  { name: 'ذهبي', hex: '#F5B93E', code: 'GLD' },
+  { name: 'فضي', hex: '#C0C0C0', code: 'SLV' },
+  { name: 'متعدد الألوان', hex: 'linear', code: 'MLT' },
+]
+const COLOR_PRESETS = COLOR_LIST.slice(0, 8).map((c) => c.name)
 
 function compressImage(file) {
   return new Promise((resolve, reject) => {
@@ -132,6 +151,54 @@ function qtyOf(p) {
   return Number(q) || 0
 }
 
+// ===== مصفوفة (قياس × لون) =====
+// variants.matrix = { L: [{name, hex, qty, sku}], XL: [...] }
+function matrixOf(p) {
+  let v = p.variants
+  try { if (typeof v === 'string') v = JSON.parse(v) } catch (e) { v = null }
+  const m = v?.matrix
+  return (m && typeof m === 'object' && Object.keys(m).length > 0) ? m : null
+}
+function sizeTotal(matrix, sizeStock, size) {
+  if (matrix?.[size]) return matrix[size].reduce((s, c) => s + (Number(c.qty) || 0), 0)
+  return Number(sizeStock?.[size]) || 0
+}
+// إعادة بناء الحقول المتزامنة (sizeStock والألوان والإجمالي) من المصفوفة
+function rebuildVariants(v) {
+  const out = { ...(v || {}) }
+  const matrix = out.matrix || {}
+  const ss = { ...(out.sizeStock || {}) }
+  const colorSet = new Set(Array.isArray(out.colors) ? out.colors : [])
+  for (const [size, rows] of Object.entries(matrix)) {
+    ss[size] = rows.reduce((s, c) => s + (Number(c.qty) || 0), 0)
+    rows.forEach((c) => colorSet.add(c.name))
+  }
+  out.sizeStock = ss
+  out.colors = [...colorSet]
+  const total = Object.values(ss).reduce((s, n) => s + (Number(n) || 0), 0)
+  return { variants: out, total }
+}
+
+// ===== حفظ تلقائي مع دعم انقطاع الإنترنت =====
+const PENDING_KEY = 'almukhtar_pending_stock'
+function queuePending(productId, payload) {
+  try {
+    const q = JSON.parse(localStorage.getItem(PENDING_KEY) || '{}')
+    q[productId] = payload
+    localStorage.setItem(PENDING_KEY, JSON.stringify(q))
+  } catch (e) { /* ignore */ }
+}
+function clearPending(productId) {
+  try {
+    const q = JSON.parse(localStorage.getItem(PENDING_KEY) || '{}')
+    delete q[productId]
+    localStorage.setItem(PENDING_KEY, JSON.stringify(q))
+  } catch (e) { /* ignore */ }
+}
+function getPending() {
+  try { return JSON.parse(localStorage.getItem(PENDING_KEY) || '{}') } catch (e) { return {} }
+}
+
 export default function SellerDashboard() {
   const [user, setUser] = useState(null)
   const [store, setStore] = useState(null)
@@ -144,12 +211,22 @@ export default function SellerDashboard() {
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState(null)
   const [savingQty, setSavingQty] = useState(null) // id المنتج الجاري تحديث كميته
+  const [expanded, setExpanded] = useState({}) // {productId: {size: true}} بطاقات المقاسات المفتوحة
+  const [toast, setToast] = useState(null) // تنبيه الحفظ الصغير
+  const [colorPicker, setColorPicker] = useState(null) // {pid, size} قائمة إضافة لون مفتوحة
+  const [customColor, setCustomColor] = useState({ name: '', hex: '#888888' })
+
+  function showToast(text) {
+    setToast(text)
+    setTimeout(() => setToast(null), 1600)
+  }
 
   const empty = {
     name: '', description: '', category: '',
     price: '', currency: 'IQD', quantity: '1',
     hide_price: false, contact_phone: '', video_url: '',
     audience: '', // الفئة المستهدفة: نسائي/رجالي/ولادي/بناتي
+    low_stock_threshold: '3', // حد تنبيه المخزون المنخفض
     sizes: [], colors: [], images: [],
     sizeStock: {}, // مخزون كل مقاس: { S: 3, M: 5 }
   }
@@ -200,7 +277,11 @@ export default function SellerDashboard() {
   const stats = useMemo(() => {
     const total = products.length
     const pieces = products.reduce((s, p) => s + qtyOf(p), 0)
-    const low = products.filter((p) => qtyOf(p) > 0 && qtyOf(p) <= LOW_STOCK)
+    const thr = (p) => {
+      const t = Number(p.low_stock_threshold)
+      return Number.isFinite(t) && t > 0 ? t : LOW_STOCK
+    }
+    const low = products.filter((p) => qtyOf(p) > 0 && qtyOf(p) <= thr(p))
     const out = products.filter((p) => qtyOf(p) === 0)
     return { total, pieces, low, out }
   }, [products])
@@ -221,6 +302,114 @@ export default function SellerDashboard() {
       return matchQ && matchStock
     })
   }, [products, search, stockFilter])
+
+  // ===== الحفظ المركزي للمتغيرات (تفاؤلي + دعم الأوفلاين) =====
+  async function persistVariants(p, newVariantsRaw) {
+    const { variants: newVariants, total } = rebuildVariants(newVariantsRaw)
+    // تحديث فوري بالواجهة
+    setProducts((prev) =>
+      prev.map((x) =>
+        x.id === p.id
+          ? { ...x, variants: newVariants, stock_quantity: total, quantity: total, stock: total }
+          : x
+      )
+    )
+    const payload = {
+      variants: newVariants,
+      stock_quantity: total,
+      quantity: total,
+      stock: total,
+      updated_at: new Date().toISOString(),
+    }
+    setSavingQty(p.id)
+    const { error } = await supabase.from('products').update(payload).eq('id', p.id)
+    setSavingQty(null)
+    if (error) {
+      // انقطاع اتصال؟ نحفظ محلياً ونرسل عند العودة
+      console.error(error)
+      queuePending(p.id, payload)
+      showToast('📴 حُفظ محلياً — سيُرسل عند عودة الاتصال')
+    } else {
+      clearPending(p.id)
+      showToast('✓ تم الحفظ')
+    }
+  }
+
+  // إرسال التعديلات المعلقة عند عودة الاتصال
+  useEffect(() => {
+    async function flushPending() {
+      const q = getPending()
+      for (const [pid, payload] of Object.entries(q)) {
+        const { error } = await supabase.from('products').update(payload).eq('id', pid)
+        if (!error) clearPending(pid)
+      }
+    }
+    flushPending()
+    window.addEventListener('online', flushPending)
+    return () => window.removeEventListener('online', flushPending)
+  }, [])
+
+  // ===== عمليات المصفوفة (قياس × لون) =====
+  function getV(p) {
+    let v = p.variants
+    try { if (typeof v === 'string') v = JSON.parse(v) } catch (e) { v = {} }
+    return v && typeof v === 'object' ? { ...v } : {}
+  }
+
+  function addColorToSize(p, size, colorName, colorHex) {
+    const v = getV(p)
+    const matrix = { ...(v.matrix || {}) }
+    const rows = [...(matrix[size] || [])]
+    // منع تكرار نفس اللون تحت نفس القياس
+    if (rows.some((c) => c.name === colorName)) {
+      setMsg({ type: 'err', text: `اللون "${colorName}" موجود مسبقاً تحت مقاس ${size}` })
+      return
+    }
+    // أول لون يرث مخزون المقاس القديم حتى لا يضيع
+    const inherit = rows.length === 0 ? (Number(v.sizeStock?.[size]) || 0) : 0
+    const colorCode = COLOR_LIST.find((c) => c.name === colorName)?.code || 'CUS'
+    rows.push({
+      name: colorName,
+      hex: colorHex,
+      qty: inherit,
+      sku: `${p.sku || 'PR'}-${colorCode}-${size}`,
+    })
+    matrix[size] = rows
+    persistVariants(p, { ...v, matrix })
+    setColorPicker(null)
+    setCustomColor({ name: '', hex: '#888888' })
+  }
+
+  function changeColorQty(p, size, colorName, delta) {
+    const v = getV(p)
+    const matrix = { ...(v.matrix || {}) }
+    matrix[size] = (matrix[size] || []).map((c) =>
+      c.name === colorName ? { ...c, qty: Math.max(0, (Number(c.qty) || 0) + delta) } : c
+    )
+    persistVariants(p, { ...v, matrix })
+  }
+
+  function removeColorFromSize(p, size, colorName) {
+    if (!window.confirm(`حذف اللون "${colorName}" من مقاس ${size}؟`)) return
+    const v = getV(p)
+    const matrix = { ...(v.matrix || {}) }
+    matrix[size] = (matrix[size] || []).filter((c) => c.name !== colorName)
+    if (matrix[size].length === 0) delete matrix[size]
+    persistVariants(p, { ...v, matrix })
+  }
+
+  function toggleSizeCard(pid, size) {
+    setExpanded((prev) => ({
+      ...prev,
+      [pid]: { ...(prev[pid] || {}), [size]: !prev[pid]?.[size] },
+    }))
+  }
+
+  // حد التنبيه لكل منتج (قابل للتعديل من نموذج المنتج)
+  function thresholdOf(p) {
+    const t = Number(p.low_stock_threshold)
+    return Number.isFinite(t) && t > 0 ? t : LOW_STOCK
+  }
 
   // ===== تعديل الكمية السريع [−] [+] =====
   async function changeQty(p, delta) {
@@ -363,6 +552,7 @@ export default function SellerDashboard() {
       sizes: Array.isArray(v?.sizes) ? v.sizes : [],
       colors: Array.isArray(v?.colors) ? v.colors : [],
       audience: v?.audience || '',
+      low_stock_threshold: String(p.low_stock_threshold ?? 3),
       sizeStock: (v?.sizeStock && typeof v.sizeStock === 'object') ? { ...v.sizeStock } : {},
       images: imgs,
     })
@@ -411,13 +601,29 @@ export default function SellerDashboard() {
         quantity: totalQty,
         stock_quantity: totalQty,
         stock: totalQty,
+        low_stock_threshold: Math.max(1, Number(f.low_stock_threshold) || 3),
         variants: (f.sizes.length || f.colors.length || f.audience)
-          ? {
-              sizes: f.sizes,
-              colors: f.colors,
-              ...(f.audience ? { audience: f.audience } : {}),
-              ...(hasSizeStock ? { sizeStock: cleanSizeStock } : {}),
-            }
+          ? (() => {
+              // نحافظ على مصفوفة الألوان الموجودة للمقاسات المتبقية
+              let oldMatrix = null
+              if (editingId) {
+                const oldP = products.find((x) => x.id === editingId)
+                oldMatrix = oldP ? matrixOf(oldP) : null
+              }
+              const keptMatrix = {}
+              if (oldMatrix) {
+                for (const s of f.sizes) {
+                  if (oldMatrix[s]) keptMatrix[s] = oldMatrix[s]
+                }
+              }
+              return {
+                sizes: f.sizes,
+                colors: f.colors,
+                ...(f.audience ? { audience: f.audience } : {}),
+                ...(hasSizeStock ? { sizeStock: cleanSizeStock } : {}),
+                ...(Object.keys(keptMatrix).length ? { matrix: keptMatrix } : {}),
+              }
+            })()
           : null,
         images: imageUrls,
         image_url: imageUrls[0] || null,
@@ -501,6 +707,7 @@ export default function SellerDashboard() {
       </header>
 
       {msg && <div className={`sd-msg ${msg.type}`}>{msg.text}</div>}
+      {toast && <div className="sd-toast">{toast}</div>}
 
       {loading ? (
         <div className="sd-state">⏳ جاري التحميل...</div>
@@ -578,6 +785,17 @@ export default function SellerDashboard() {
           <input className="sd-input" dir="ltr" value={f.contact_phone}
             onChange={(e) => setF({ ...f, contact_phone: e.target.value })}
             placeholder="9647701234567" />
+
+          {trackStock && (
+            <>
+              <label className="sd-label">⚠️ حد تنبيه المخزون المنخفض</label>
+              <input className="sd-input" type="number" inputMode="numeric" min="1"
+                value={f.low_stock_threshold}
+                onChange={(e) => setF({ ...f, low_stock_threshold: e.target.value })}
+                placeholder="3" />
+              <div className="sd-hint">🔔 عندما تصل كمية أي لون/مقاس لهذا الحد أو أقل، يظهر تنبيه "منخفض"</div>
+            </>
+          )}
 
           <label className="sd-label">الوصف</label>
           <textarea className="sd-input" rows={3} value={f.description}
@@ -762,7 +980,8 @@ export default function SellerDashboard() {
           ) : (
             filtered.map((p) => {
               const qty = qtyOf(p)
-              const stockClass = qty === 0 ? 'out' : qty <= LOW_STOCK ? 'low' : 'ok'
+              const thr = thresholdOf(p)
+              const stockClass = qty === 0 ? 'out' : qty <= thr ? 'low' : 'ok'
               return (
                 <div key={p.id} className={`sd-item ${trackStock ? stockClass : ''}`}>
                   <div className="sd-item-img">
@@ -779,7 +998,7 @@ export default function SellerDashboard() {
                         return a ? <span className="sd-badge-aud">{a.icon} {a.label}</span> : null
                       })()}
                       {trackStock && qty === 0 && <span className="sd-badge-out">نفد</span>}
-                      {trackStock && qty > 0 && qty <= LOW_STOCK && <span className="sd-badge-low">منخفض</span>}
+                      {trackStock && qty > 0 && qty <= thr && <span className="sd-badge-low">منخفض</span>}
                     </div>
                     <div className="sd-item-price">
                       {p.hide_price
@@ -790,37 +1009,140 @@ export default function SellerDashboard() {
 
                   {/* ===== عداد المخزون ===== */}
                   {trackStock && (() => {
-                    const ss = sizeStockOf(p)
-                    if (ss) {
-                      // عدادات لكل مقاس
+                    const thr = thresholdOf(p)
+                    const v = getV(p)
+                    const matrix = v.matrix || {}
+                    const sizes = Array.isArray(v.sizes) ? v.sizes : []
+                    if (sizes.length > 0) {
+                      // بطاقات المقاسات القابلة للطي (قياس × لون)
                       return (
-                        <div className="sd-sizes-qty">
-                          {Object.entries(ss).map(([size, n]) => {
-                            const sq = Number(n) || 0
+                        <div className="sd-matrix">
+                          {sizes.map((size) => {
+                            const rows = matrix[size] || []
+                            const st = sizeTotal(matrix, v.sizeStock, size)
+                            const cls = st === 0 ? 'out' : st <= thr ? 'low' : ''
+                            const isOpen = !!expanded[p.id]?.[size]
+                            const pickerOpen = colorPicker?.pid === p.id && colorPicker?.size === size
+                            const usedNames = rows.map((c) => c.name)
                             return (
-                              <div key={size} className={`sd-size-cell ${sq === 0 ? 'out' : sq <= LOW_STOCK ? 'low' : ''}`}>
-                                <span className="sd-size-name">{size}</span>
-                                <div className="sd-size-controls">
-                                  <button
-                                    disabled={savingQty === p.id || sq === 0}
-                                    onClick={() => changeSizeQty(p, size, -1)}
-                                    title={`بيع قطعة مقاس ${size}`}
-                                  >−</button>
-                                  <span>{sq}</span>
-                                  <button
-                                    className="plus"
-                                    disabled={savingQty === p.id}
-                                    onClick={() => changeSizeQty(p, size, +1)}
-                                    title={`إضافة قطعة مقاس ${size}`}
-                                  >+</button>
-                                </div>
+                              <div key={size} className={`sd-mx-card ${cls}`}>
+                                {/* رأس البطاقة: القياس + الإجمالي — اضغط للتوسيع */}
+                                <button className="sd-mx-head" onClick={() => toggleSizeCard(p.id, size)}>
+                                  <span className="sd-mx-size">{size}</span>
+                                  <span className={`sd-mx-total ${cls}`}>{st}</span>
+                                  <span className="sd-mx-arrow">{isOpen ? '▲' : '▼'}</span>
+                                </button>
+
+                                {isOpen && (
+                                  <div className="sd-mx-body">
+                                    {/* صفوف الألوان */}
+                                    {rows.map((c) => {
+                                      const cq = Number(c.qty) || 0
+                                      const cCls = cq === 0 ? 'out' : cq <= thr ? 'low' : 'ok'
+                                      return (
+                                        <div key={c.name} className="sd-mx-row">
+                                          <span
+                                            className="sd-mx-swatch"
+                                            style={c.hex === 'linear'
+                                              ? { background: 'linear-gradient(45deg,#f00,#ff0,#0f0,#00f)' }
+                                              : { background: c.hex || '#888' }}
+                                          />
+                                          <span className="sd-mx-cname">{c.name}</span>
+                                          <span className={`sd-mx-status ${cCls}`}>
+                                            {cq === 0 ? 'نافد' : cq <= thr ? 'منخفض' : 'متوفر'}
+                                          </span>
+                                          <div className="sd-size-controls">
+                                            <button
+                                              disabled={savingQty === p.id || cq === 0}
+                                              onClick={() => changeColorQty(p, size, c.name, -1)}
+                                            >−</button>
+                                            <span>{cq}</span>
+                                            <button
+                                              className="plus"
+                                              disabled={savingQty === p.id}
+                                              onClick={() => changeColorQty(p, size, c.name, +1)}
+                                            >+</button>
+                                          </div>
+                                          <button
+                                            className="sd-mx-del"
+                                            onClick={() => removeColorFromSize(p, size, c.name)}
+                                            title="حذف اللون من هذا القياس"
+                                          >🗑️</button>
+                                        </div>
+                                      )
+                                    })}
+
+                                    {/* بدون ألوان: عداد المقاس الإجمالي القديم */}
+                                    {rows.length === 0 && (
+                                      <div className="sd-mx-row sd-mx-plain">
+                                        <span className="sd-mx-cname">إجمالي المقاس (بدون تفصيل ألوان)</span>
+                                        <div className="sd-size-controls">
+                                          <button
+                                            disabled={savingQty === p.id || st === 0}
+                                            onClick={() => changeSizeQty(p, size, -1)}
+                                          >−</button>
+                                          <span>{st}</span>
+                                          <button
+                                            className="plus"
+                                            disabled={savingQty === p.id}
+                                            onClick={() => changeSizeQty(p, size, +1)}
+                                          >+</button>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    {/* إضافة لون */}
+                                    {pickerOpen ? (
+                                      <div className="sd-mx-picker">
+                                        <div className="sd-mx-picker-grid">
+                                          {COLOR_LIST.filter((c) => !usedNames.includes(c.name)).map((c) => (
+                                            <button key={c.name} className="sd-mx-pick"
+                                              onClick={() => addColorToSize(p, size, c.name, c.hex)}>
+                                              <span className="sd-mx-swatch"
+                                                style={c.hex === 'linear'
+                                                  ? { background: 'linear-gradient(45deg,#f00,#ff0,#0f0,#00f)' }
+                                                  : { background: c.hex }} />
+                                              {c.name}
+                                            </button>
+                                          ))}
+                                        </div>
+                                        {/* لون آخر مخصص */}
+                                        <div className="sd-mx-custom">
+                                          <input
+                                            type="color"
+                                            value={customColor.hex}
+                                            onChange={(e) => setCustomColor({ ...customColor, hex: e.target.value })}
+                                            className="sd-mx-colorpick"
+                                          />
+                                          <input
+                                            className="sd-input sd-mx-custom-name"
+                                            placeholder="لون آخر — اكتب اسمه"
+                                            value={customColor.name}
+                                            onChange={(e) => setCustomColor({ ...customColor, name: e.target.value })}
+                                          />
+                                          <button
+                                            className="sd-mx-add-custom"
+                                            disabled={!customColor.name.trim()}
+                                            onClick={() => addColorToSize(p, size, customColor.name.trim(), customColor.hex)}
+                                          >إضافة</button>
+                                        </div>
+                                        <button className="sd-mx-cancel" onClick={() => setColorPicker(null)}>إلغاء</button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        className="sd-mx-addcolor"
+                                        onClick={() => setColorPicker({ pid: p.id, size })}
+                                      >+ إضافة لون</button>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             )
                           })}
                         </div>
                       )
                     }
-                    // عداد إجمالي (بدون مقاسات)
+                    // عداد إجمالي (منتج بدون مقاسات)
                     return (
                       <div className="sd-qty">
                         <button
@@ -1054,6 +1376,108 @@ const CSS = `
   display: flex; gap: 6px; flex-wrap: wrap;
   flex-shrink: 0; max-width: 300px;
   justify-content: flex-end;
+}
+
+/* ---- مصفوفة قياس × لون ---- */
+.sd-matrix {
+  display: flex; flex-direction: column; gap: 6px;
+  flex-shrink: 0; width: 100%; max-width: 340px;
+}
+.sd-mx-card {
+  border: 1.5px solid #e2e8f0; border-radius: 11px;
+  background: #f8fafc; overflow: hidden;
+}
+.sd-mx-card.low { border-color: #f59e0b; }
+.sd-mx-card.out { border-color: #fca5a5; }
+.sd-mx-head {
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  background: none; border: none; cursor: pointer;
+  padding: 8px 12px; font-family: inherit;
+}
+.sd-mx-size {
+  background: #0A1D37; color: #F5B93E;
+  font-size: 12px; font-weight: 800;
+  padding: 3px 12px; border-radius: 999px;
+}
+.sd-mx-total { font-size: 15px; font-weight: 800; color: #0A1D37; margin-right: auto; }
+.sd-mx-total.low { color: #d97706; }
+.sd-mx-total.out { color: #dc2626; }
+.sd-mx-arrow { font-size: 10px; color: #94a3b8; }
+.sd-mx-body { padding: 4px 10px 10px; background: #fff; }
+.sd-mx-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 4px; border-bottom: 1px dashed #f1f5f9;
+}
+.sd-mx-row:last-of-type { border-bottom: none; }
+.sd-mx-swatch {
+  width: 20px; height: 20px; border-radius: 6px;
+  border: 1.5px solid #e2e8f0; flex-shrink: 0;
+}
+.sd-mx-cname { font-size: 13px; font-weight: 700; color: #0A1D37; flex: 1; min-width: 0; }
+.sd-mx-status {
+  font-size: 10px; font-weight: 800;
+  padding: 2px 8px; border-radius: 999px;
+}
+.sd-mx-status.ok  { background: #ecfdf5; color: #16a34a; }
+.sd-mx-status.low { background: #fef3c7; color: #b45309; }
+.sd-mx-status.out { background: #fee2e2; color: #dc2626; }
+.sd-mx-del {
+  background: none; border: none; font-size: 13px;
+  cursor: pointer; padding: 2px; opacity: .7;
+}
+.sd-mx-plain .sd-mx-cname { color: #64748b; font-weight: 500; font-size: 12px; }
+.sd-mx-addcolor {
+  width: 100%; margin-top: 6px;
+  background: #eff6ff; color: #1d4ed8;
+  border: 1.5px dashed #93c5fd; border-radius: 9px;
+  padding: 8px; font-size: 12.5px; font-weight: 800;
+  cursor: pointer; font-family: inherit;
+}
+.sd-mx-picker { margin-top: 8px; }
+.sd-mx-picker-grid {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px;
+}
+.sd-mx-pick {
+  display: flex; align-items: center; gap: 7px;
+  background: #f8fafc; border: 1.5px solid #e2e8f0;
+  border-radius: 9px; padding: 7px 9px;
+  font-size: 12px; font-weight: 700; color: #0A1D37;
+  cursor: pointer; font-family: inherit; text-align: right;
+}
+.sd-mx-pick:hover { border-color: #F5B93E; }
+.sd-mx-custom { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.sd-mx-colorpick {
+  width: 38px; height: 38px; border: 1.5px solid #e2e8f0;
+  border-radius: 9px; padding: 2px; cursor: pointer; background: #fff;
+}
+.sd-mx-custom-name { flex: 1; margin: 0; padding: 9px 10px; font-size: 13px; }
+.sd-mx-add-custom {
+  background: #16a34a; color: #fff; border: none;
+  border-radius: 9px; padding: 9px 14px;
+  font-size: 12.5px; font-weight: 800; cursor: pointer; font-family: inherit;
+}
+.sd-mx-add-custom:disabled { opacity: .4; }
+.sd-mx-cancel {
+  width: 100%; margin-top: 6px;
+  background: none; border: none; color: #94a3b8;
+  font-size: 12px; cursor: pointer; font-family: inherit;
+  text-decoration: underline;
+}
+
+/* ---- تنبيه الحفظ ---- */
+.sd-toast {
+  position: fixed; bottom: 24px; right: 50%;
+  transform: translateX(50%);
+  background: #0A1D37; color: #fff;
+  padding: 11px 22px; border-radius: 999px;
+  font-size: 13.5px; font-weight: 800;
+  box-shadow: 0 8px 24px rgba(10,29,55,.35);
+  z-index: 200;
+  animation: sd-toast-in .2s ease;
+}
+@keyframes sd-toast-in {
+  from { opacity: 0; transform: translateX(50%) translateY(10px); }
+  to   { opacity: 1; transform: translateX(50%) translateY(0); }
 }
 .sd-size-cell {
   background: #f8fafc;

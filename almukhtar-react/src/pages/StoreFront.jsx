@@ -276,8 +276,7 @@ export default function StoreFront() {
       const mine = list.filter((p) =>
         ids.includes(p.store_id) || ids.includes(p.seller_id) || ids.includes(p.user_id)
       )
-      // المنتجات القديمة غير المربوطة بمتجر: نعرض الكل مؤقتاً بدل صفحة فارغة
-      if (mine.length > 0) list = mine
+      list = mine
     }
     setProducts(list)
     setLoading(false)

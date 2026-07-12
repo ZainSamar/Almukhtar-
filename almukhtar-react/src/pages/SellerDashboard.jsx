@@ -150,13 +150,7 @@ export default function SellerDashboard() {
 
     await fetchProducts(user, storeRow)
     setLoading(false)
-  }
-    setStore(storeRow)
-
-    await fetchProducts(user, storeRow)
-    setLoading(false)
-  }
-
+  }  
   async function fetchProducts(u = user, st = store) {
     const { data, error } = await supabase
       .from('products').select('*')

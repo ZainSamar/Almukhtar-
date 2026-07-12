@@ -2,18 +2,17 @@ import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../lib/supabase.js'
 
 // ================================================================
-//  لوحة تحكم البائع — مربوطة بالمتجر ونوعه
-//  - الفئات تتغير تلقائياً حسب store_type (أزياء / عقارات / خدمات ...)
-//  - كل منتج يُحفظ مربوطاً بـ store_id + seller_id تلقائياً
-//  - Magic Toggle لإخفاء السعر وتحويله لواتساب
-//  - رفع صور متعددة مع ضغط تلقائي
-//  - SKU تلقائي حسب الفئة (CL-001 / SH-002 ...)
+//  لوحة تحكم البائع — مع إدارة مخزون احترافية
+//  - بطاقات إحصائية: المنتجات، القطع، المنخفض، النافد
+//  - تعديل الكمية بضغطة واحدة [−] [+] من القائمة مباشرة
+//  - تنبيه أصفر للمنتجات القاربة على النفاد + شارات ملونة
+//  - فلترة سريعة: الكل / منخفض / نافد
+//  - الفئات والحقول تتغير حسب نوع المتجر (أزياء/عقارات/خدمات..)
 // ================================================================
 
-// اسم الـ bucket في Supabase Storage — إذا فشل الرفع تُحفظ الصور بصيغة مضغوطة داخل قاعدة البيانات تلقائياً
 const STORAGE_BUCKET = 'product-images'
+const LOW_STOCK = 3 // حد التنبيه: الكمية 3 أو أقل تعتبر "قاربت على النفاد"
 
-// الفئات المتاحة حسب نوع المتجر
 const CATS_BY_TYPE = {
   fashion: [
     { id: 'clothes', label: 'أزياء وملابس', icon: '👗', sku: 'CL' },
@@ -66,7 +65,6 @@ function resolveType(raw) {
 const SIZE_PRESETS = ['S', 'M', 'L', 'XL', 'XXL', '38', '40', '42']
 const COLOR_PRESETS = ['أسود', 'أبيض', 'أحمر', 'أزرق', 'أخضر', 'بيج', 'ذهبي', 'وردي']
 
-// ضغط صورة عبر canvas — الحد الأقصى 1000px وجودة 0.72
 function compressImage(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -107,23 +105,30 @@ function blobToDataURL(blob) {
   })
 }
 
+// كمية المنتج (يدعم الأعمدة الثلاثة القديمة)
+function qtyOf(p) {
+  const q = p.stock_quantity ?? p.quantity ?? p.stock
+  return Number(q) || 0
+}
+
 export default function SellerDashboard() {
   const [user, setUser] = useState(null)
   const [store, setStore] = useState(null)
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [stockFilter, setStockFilter] = useState('all') // all | low | out
   const [showForm, setShowForm] = useState(false)
   const [editingId, setEditingId] = useState(null)
   const [saving, setSaving] = useState(false)
-  const [msg, setMsg] = useState(null) // {type:'ok'|'err', text}
+  const [msg, setMsg] = useState(null)
+  const [savingQty, setSavingQty] = useState(null) // id المنتج الجاري تحديث كميته
 
-  // ---- حقول النموذج ----
   const empty = {
     name: '', description: '', category: '',
     price: '', currency: 'IQD', quantity: '1',
     hide_price: false, contact_phone: '', video_url: '',
-    sizes: [], colors: [], images: [], // images: [{dataUrl, blob}] أو روابط نصية عند التعديل
+    sizes: [], colors: [], images: [],
   }
   const [f, setF] = useState(empty)
 
@@ -132,6 +137,8 @@ export default function SellerDashboard() {
   const isService = storeType === 'services'
   const isRealestate = storeType === 'realestate'
   const showVariants = storeType === 'fashion' || storeType === 'general'
+  // المخزون منطقي فقط للمتاجر السلعية (مو خدمات ولا عقارات)
+  const trackStock = !isService && !isRealestate
 
   useEffect(() => { init() }, [])
 
@@ -140,6 +147,7 @@ export default function SellerDashboard() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { window.location.href = '/login'; return }
     setUser(user)
+
     const { data: storeRow } = await supabase
       .from('stores').select('*').eq('owner_id', user.id).maybeSingle()
     if (!storeRow || !storeRow.is_setup_complete) {
@@ -150,7 +158,8 @@ export default function SellerDashboard() {
 
     await fetchProducts(user, storeRow)
     setLoading(false)
-  }  
+  }
+
   async function fetchProducts(u = user, st = store) {
     const { data, error } = await supabase
       .from('products').select('*')
@@ -164,16 +173,62 @@ export default function SellerDashboard() {
     setProducts(mine)
   }
 
+  // ===== الإحصائيات =====
+  const stats = useMemo(() => {
+    const total = products.length
+    const pieces = products.reduce((s, p) => s + qtyOf(p), 0)
+    const low = products.filter((p) => qtyOf(p) > 0 && qtyOf(p) <= LOW_STOCK)
+    const out = products.filter((p) => qtyOf(p) === 0)
+    return { total, pieces, low, out }
+  }, [products])
+
+  // ===== الفلترة =====
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return products
-    return products.filter((p) =>
-      (p.name || '').toLowerCase().includes(q) ||
-      (p.sku || '').toLowerCase().includes(q)
-    )
-  }, [products, search])
+    return products.filter((p) => {
+      const matchQ =
+        !q ||
+        (p.name || '').toLowerCase().includes(q) ||
+        (p.sku || '').toLowerCase().includes(q)
+      const qty = qtyOf(p)
+      const matchStock =
+        stockFilter === 'all' ||
+        (stockFilter === 'low' && qty > 0 && qty <= LOW_STOCK) ||
+        (stockFilter === 'out' && qty === 0)
+      return matchQ && matchStock
+    })
+  }, [products, search, stockFilter])
 
-  // ---- SKU تلقائي: بادئة الفئة + رقم متسلسل ----
+  // ===== تعديل الكمية السريع [−] [+] =====
+  async function changeQty(p, delta) {
+    const newQty = Math.max(0, qtyOf(p) + delta)
+    setSavingQty(p.id)
+    // تحديث فوري بالواجهة (تفاؤلي)
+    setProducts((prev) =>
+      prev.map((x) =>
+        x.id === p.id
+          ? { ...x, stock_quantity: newQty, quantity: newQty, stock: newQty }
+          : x
+      )
+    )
+    const { error } = await supabase
+      .from('products')
+      .update({
+        stock_quantity: newQty,
+        quantity: newQty,
+        stock: newQty,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', p.id)
+    if (error) {
+      console.error(error)
+      setMsg({ type: 'err', text: 'تعذر تحديث الكمية — حاول مرة ثانية' })
+      await fetchProducts()
+    }
+    setSavingQty(null)
+  }
+
+  // ===== SKU تلقائي =====
   function nextSku(categoryId) {
     const prefix = CATS.find((c) => c.id === categoryId)?.sku || 'PR'
     const nums = products
@@ -183,10 +238,9 @@ export default function SellerDashboard() {
     const next = (nums.length ? Math.max(...nums) : 0) + 1
     return `${prefix}-${String(next).padStart(3, '0')}`
   }
-
   const previewSku = f.category ? nextSku(f.category) : null
 
-  // ---- الصور ----
+  // ===== الصور =====
   async function onPickImages(e) {
     const files = Array.from(e.target.files || []).slice(0, 6 - f.images.length)
     for (const file of files) {
@@ -203,11 +257,10 @@ export default function SellerDashboard() {
     setF((prev) => ({ ...prev, images: prev.images.filter((_, x) => x !== i) }))
   }
 
-  // رفع الصور: Storage أولاً، وإذا فشل → data URL مضغوط مباشرة
   async function uploadImages() {
     const urls = []
     for (const img of f.images) {
-      if (typeof img === 'string') { urls.push(img); continue } // صورة قديمة عند التعديل
+      if (typeof img === 'string') { urls.push(img); continue }
       let uploaded = null
       try {
         const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
@@ -217,7 +270,7 @@ export default function SellerDashboard() {
           const { data } = supabase.storage.from(STORAGE_BUCKET).getPublicUrl(path)
           uploaded = data?.publicUrl || null
         }
-      } catch (e) { /* يفشل بصمت وننتقل للخطة البديلة */ }
+      } catch (e) { /* الخطة البديلة */ }
       urls.push(uploaded || img.dataUrl)
     }
     return urls
@@ -246,7 +299,7 @@ export default function SellerDashboard() {
       name: p.name || '', description: p.description || '',
       category: p.category || CATS[0].id,
       price: p.price ?? '', currency: p.currency || 'IQD',
-      quantity: String(p.stock_quantity ?? p.quantity ?? 1),
+      quantity: String(qtyOf(p)),
       hide_price: !!p.hide_price,
       contact_phone: p.contact_phone || '',
       video_url: p.video_url || '',
@@ -261,7 +314,6 @@ export default function SellerDashboard() {
 
   async function save() {
     setMsg(null)
-    // ---- تحقق ----
     if (!f.name.trim()) return setMsg({ type: 'err', text: 'اكتب اسم المنتج' })
     if (!f.category) return setMsg({ type: 'err', text: 'اختر الفئة' })
     if (!f.hide_price && !f.price) return setMsg({ type: 'err', text: 'اكتب السعر أو فعّل إخفاء السعر' })
@@ -277,6 +329,8 @@ export default function SellerDashboard() {
 
       const row = {
         name: f.name.trim(),
+        name_ar: f.name.trim(),
+        name_en: f.name.trim(),
         title: f.name.trim(),
         description: f.description.trim() || null,
         category: f.category,
@@ -296,7 +350,6 @@ export default function SellerDashboard() {
         sku,
         is_active: true,
         status: 'active',
-        // ---- الربط التلقائي بالمتجر والبائع ----
         store_id: store?.id || null,
         seller_id: user.id,
         user_id: user.id,
@@ -351,24 +404,26 @@ export default function SellerDashboard() {
         <div>
           <div className="sd-store-name">{store?.name_ar || store?.name_en || 'متجري'}</div>
           <div className="sd-store-type">
-            لوحة التحكم · {CATS_BY_TYPE[storeType] === CATS_BY_TYPE.general ? 'متجر عام' :
-              storeType === 'fashion' ? 'متجر أزياء 👗' :
+            لوحة التحكم · {storeType === 'fashion' ? 'متجر أزياء 👗' :
               storeType === 'realestate' ? 'مكتب عقارات 🏠' :
-              storeType === 'services' ? 'خدمات 🛠️' : 'إلكترونيات 📱'}
+              storeType === 'services' ? 'خدمات 🛠️' :
+              storeType === 'electronics' ? 'إلكترونيات 📱' : 'متجر عام'}
           </div>
         </div>
-        {store?.store_slug && (
-          <a className="sd-view-store" href={`/store/${store.store_slug}`} target="_blank" rel="noopener noreferrer">
-            عرض متجري ↗
-          </a>
-        )}
-        <button
-          className="sd-view-store"
-          style={{ cursor: 'pointer', background: 'none', border: '1px solid rgba(255,255,255,0.25)', color: '#cbd5e1' }}
-          onClick={async () => { await supabase.auth.signOut(); window.location.href = '/' }}
-        >
-          خروج
-        </button>
+        <div className="sd-header-actions">
+          {store?.store_slug && (
+            <a className="sd-view-store" href={`/store/${store.store_slug}`} target="_blank" rel="noopener noreferrer">
+              عرض متجري ↗
+            </a>
+          )}
+          <a className="sd-view-store sd-edit-store" href="/setup">✏️ تعديل المتجر</a>
+          <button
+            className="sd-view-store sd-logout"
+            onClick={async () => { await supabase.auth.signOut(); window.location.href = '/' }}
+          >
+            خروج
+          </button>
+        </div>
       </header>
 
       {msg && <div className={`sd-msg ${msg.type}`}>{msg.text}</div>}
@@ -401,7 +456,6 @@ export default function SellerDashboard() {
             ))}
           </div>
 
-          {/* ===== Magic Toggle ===== */}
           <div className="sd-toggle-box">
             <label className="sd-toggle">
               <input type="checkbox" checked={f.hide_price}
@@ -434,7 +488,7 @@ export default function SellerDashboard() {
                 <option value="USD">$ دولار</option>
               </select>
             </div>
-            {!isService && !isRealestate && (
+            {trackStock && (
               <div style={{ flex: 1 }}>
                 <label className="sd-label">الكمية</label>
                 <input className="sd-input" type="number" inputMode="numeric" value={f.quantity}
@@ -456,7 +510,6 @@ export default function SellerDashboard() {
             onChange={(e) => setF({ ...f, description: e.target.value })}
             placeholder={isRealestate ? 'المساحة، عدد الغرف، الطابق، الموقع...' : 'تفاصيل المنتج...'} />
 
-          {/* ===== المقاسات والألوان (للأزياء) ===== */}
           {showVariants && (
             <>
               <label className="sd-label">المقاسات المتوفرة</label>
@@ -478,7 +531,6 @@ export default function SellerDashboard() {
             </>
           )}
 
-          {/* ===== الصور ===== */}
           <label className="sd-label">الصور (حتى 6 — تُضغط تلقائياً للتحميل السريع) 📸</label>
           <div className="sd-imgs">
             {f.images.map((img, i) => (
@@ -510,10 +562,53 @@ export default function SellerDashboard() {
           </div>
         </div>
       ) : (
-        /* ================= قائمة المنتجات ================= */
+        /* ================= اللوحة الرئيسية ================= */
         <div className="sd-list-wrap">
+
+          {/* ===== بطاقات الإحصائيات ===== */}
+          <div className="sd-stats">
+            <div className="sd-stat">
+              <div className="sd-stat-num">{stats.total}</div>
+              <div className="sd-stat-label">{isRealestate ? 'العقارات' : isService ? 'الخدمات' : 'المنتجات'}</div>
+            </div>
+            {trackStock && (
+              <>
+                <div className="sd-stat">
+                  <div className="sd-stat-num">{stats.pieces}</div>
+                  <div className="sd-stat-label">قطعة بالمخزون</div>
+                </div>
+                <div className={`sd-stat ${stats.low.length ? 'warn' : ''}`}>
+                  <div className="sd-stat-num">{stats.low.length}</div>
+                  <div className="sd-stat-label">قارب على النفاد</div>
+                </div>
+                <div className={`sd-stat ${stats.out.length ? 'danger' : ''}`}>
+                  <div className="sd-stat-num">{stats.out.length}</div>
+                  <div className="sd-stat-label">نفد من المخزون</div>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* ===== تنبيه المخزون المنخفض ===== */}
+          {trackStock && (stats.low.length > 0 || stats.out.length > 0) && (
+            <div className="sd-alert">
+              <div className="sd-alert-title">⚠️ انتبه لمخزونك</div>
+              <div className="sd-alert-body">
+                {stats.out.length > 0 && (
+                  <span>🔴 نفد: {stats.out.map((p) => p.name).join('، ')}</span>
+                )}
+                {stats.low.length > 0 && (
+                  <span>🟠 قارب على النفاد: {stats.low.map((p) => `${p.name} (${qtyOf(p)})`).join('، ')}</span>
+                )}
+              </div>
+              <button className="sd-alert-btn" onClick={() => setStockFilter(stats.out.length ? 'out' : 'low')}>
+                عرضها الآن ←
+              </button>
+            </div>
+          )}
+
           <div className="sd-list-head">
-            <h2>منتجاتي ({products.length})</h2>
+            <h2>{isRealestate ? 'عقاراتي' : isService ? 'خدماتي' : 'منتجاتي'} ({products.length})</h2>
             <button className="sd-add" onClick={startAdd}>{addLabel}</button>
           </div>
 
@@ -521,31 +616,75 @@ export default function SellerDashboard() {
             onChange={(e) => setSearch(e.target.value)}
             placeholder="🔍 ابحث بالاسم أو رقم SKU..." />
 
+          {/* ===== فلترة المخزون ===== */}
+          {trackStock && products.length > 0 && (
+            <div className="sd-filters">
+              <button className={`sd-filter ${stockFilter === 'all' ? 'active' : ''}`}
+                onClick={() => setStockFilter('all')}>الكل ({products.length})</button>
+              <button className={`sd-filter warn ${stockFilter === 'low' ? 'active' : ''}`}
+                onClick={() => setStockFilter('low')}>🟠 منخفض ({stats.low.length})</button>
+              <button className={`sd-filter danger ${stockFilter === 'out' ? 'active' : ''}`}
+                onClick={() => setStockFilter('out')}>🔴 نافد ({stats.out.length})</button>
+            </div>
+          )}
+
           {filtered.length === 0 ? (
-            <div className="sd-state">📦 لا توجد منتجات — ابدأ بالإضافة!</div>
+            <div className="sd-state">
+              {products.length === 0
+                ? '📦 لا توجد منتجات — ابدأ بالإضافة!'
+                : '🔍 لا توجد نتائج لهذا الفلتر'}
+            </div>
           ) : (
-            filtered.map((p) => (
-              <div key={p.id} className="sd-item">
-                <div className="sd-item-img">
-                  {firstImg(p) ? <img src={firstImg(p)} alt="" /> : <span>🖼️</span>}
-                </div>
-                <div className="sd-item-info">
-                  <div className="sd-item-name">
-                    {p.name || p.title}
-                    {p.sku && <span className="sd-item-sku"> {p.sku}#</span>}
+            filtered.map((p) => {
+              const qty = qtyOf(p)
+              const stockClass = qty === 0 ? 'out' : qty <= LOW_STOCK ? 'low' : 'ok'
+              return (
+                <div key={p.id} className={`sd-item ${trackStock ? stockClass : ''}`}>
+                  <div className="sd-item-img">
+                    {firstImg(p) ? <img src={firstImg(p)} alt="" /> : <span>🖼️</span>}
                   </div>
-                  <div className="sd-item-price">
-                    {p.hide_price
-                      ? '🔒 السعر مخفي (واتساب)'
-                      : `${Number(p.price || 0).toLocaleString('en-US')} ${p.currency === 'USD' ? '$' : 'د.ع'}`}
+                  <div className="sd-item-info">
+                    <div className="sd-item-name">
+                      {p.name || p.title}
+                      {p.sku && <span className="sd-item-sku"> {p.sku}#</span>}
+                      {trackStock && qty === 0 && <span className="sd-badge-out">نفد</span>}
+                      {trackStock && qty > 0 && qty <= LOW_STOCK && <span className="sd-badge-low">منخفض</span>}
+                    </div>
+                    <div className="sd-item-price">
+                      {p.hide_price
+                        ? '🔒 السعر مخفي (واتساب)'
+                        : `${Number(p.price || 0).toLocaleString('en-US')} ${p.currency === 'USD' ? '$' : 'د.ع'}`}
+                    </div>
+                  </div>
+
+                  {/* ===== عداد المخزون [−] الكمية [+] ===== */}
+                  {trackStock && (
+                    <div className="sd-qty">
+                      <button
+                        className="sd-qty-btn"
+                        disabled={savingQty === p.id || qty === 0}
+                        onClick={() => changeQty(p, -1)}
+                        title="بيع / إنقاص قطعة"
+                      >−</button>
+                      <span className={`sd-qty-num ${stockClass}`}>
+                        {savingQty === p.id ? '⋯' : qty}
+                      </span>
+                      <button
+                        className="sd-qty-btn plus"
+                        disabled={savingQty === p.id}
+                        onClick={() => changeQty(p, +1)}
+                        title="إضافة قطعة للمخزون"
+                      >+</button>
+                    </div>
+                  )}
+
+                  <div className="sd-item-actions">
+                    <button onClick={() => startEdit(p)} title="تعديل">✏️</button>
+                    <button onClick={() => remove(p)} title="حذف">🗑️</button>
                   </div>
                 </div>
-                <div className="sd-item-actions">
-                  <button onClick={() => startEdit(p)} title="تعديل">✏️</button>
-                  <button onClick={() => remove(p)} title="حذف">🗑️</button>
-                </div>
-              </div>
-            ))
+              )
+            })
           )}
         </div>
       )}
@@ -573,16 +712,22 @@ const CSS = `
 }
 .sd-store-name { color: #F5B93E; font-size: 21px; font-weight: 800; }
 .sd-store-type { color: #cbd5e1; font-size: 12.5px; margin-top: 2px; }
+.sd-header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .sd-view-store {
   background: rgba(255,255,255,0.12);
   border: 1px solid rgba(245,185,62,0.6);
   color: #F5B93E;
-  padding: 8px 16px;
+  padding: 8px 14px;
   border-radius: 10px;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 700;
   text-decoration: none;
+  cursor: pointer;
+  font-family: inherit;
 }
+.sd-edit-store { border-color: rgba(255,255,255,0.3); color: #e2e8f0; }
+.sd-logout { background: none; border-color: rgba(255,255,255,0.25); color: #cbd5e1; }
+
 .sd-msg {
   max-width: 760px;
   margin: 14px auto 0;
@@ -596,6 +741,47 @@ const CSS = `
 .sd-state { text-align: center; padding: 50px 20px; color: #64748b; font-size: 16px; }
 
 .sd-list-wrap, .sd-form { max-width: 760px; margin: 16px auto 0; padding: 0 16px; }
+
+/* ---- بطاقات الإحصائيات ---- */
+.sd-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.sd-stat {
+  background: #fff;
+  border-radius: 14px;
+  padding: 14px 10px;
+  text-align: center;
+  box-shadow: 0 1px 4px rgba(10,29,55,.07);
+}
+.sd-stat-num { font-size: 26px; font-weight: 800; color: #0A1D37; }
+.sd-stat-label { font-size: 12px; color: #64748b; margin-top: 2px; }
+.sd-stat.warn .sd-stat-num { color: #d97706; }
+.sd-stat.danger .sd-stat-num { color: #dc2626; }
+
+/* ---- تنبيه المخزون ---- */
+.sd-alert {
+  background: #fffbeb;
+  border: 1.5px solid #fbbf24;
+  border-radius: 14px;
+  padding: 13px 15px;
+  margin-bottom: 14px;
+}
+.sd-alert-title { font-size: 14.5px; font-weight: 800; color: #92400e; }
+.sd-alert-body {
+  font-size: 13px; color: #78350f; margin-top: 6px;
+  display: flex; flex-direction: column; gap: 4px; line-height: 1.7;
+}
+.sd-alert-btn {
+  margin-top: 8px;
+  background: #f59e0b; color: #fff;
+  border: none; border-radius: 9px;
+  padding: 7px 16px; font-size: 12.5px; font-weight: 800;
+  cursor: pointer; font-family: inherit;
+}
+
 .sd-list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .sd-list-head h2 { font-size: 19px; color: #0A1D37; margin: 0; }
 .sd-add {
@@ -611,30 +797,83 @@ const CSS = `
   margin-bottom: 4px;
 }
 .sd-input:focus { border-color: #F5B93E; }
-.sd-search { margin-bottom: 14px; }
+.sd-search { margin-bottom: 10px; }
 
+/* ---- فلترة المخزون ---- */
+.sd-filters { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.sd-filter {
+  border: 1.5px solid #e2e8f0; background: #fff;
+  border-radius: 999px; padding: 8px 15px;
+  font-size: 13px; cursor: pointer; font-family: inherit;
+  color: #334155; font-weight: 700;
+}
+.sd-filter.active { background: #0A1D37; border-color: #0A1D37; color: #F5B93E; }
+.sd-filter.warn.active { background: #d97706; border-color: #d97706; color: #fff; }
+.sd-filter.danger.active { background: #dc2626; border-color: #dc2626; color: #fff; }
+
+/* ---- عناصر المنتجات ---- */
 .sd-item {
   background: #fff; border-radius: 14px;
-  display: flex; align-items: center; gap: 12px;
+  display: flex; align-items: center; gap: 10px;
   padding: 10px 12px; margin-bottom: 10px;
   box-shadow: 0 1px 4px rgba(10,29,55,.07);
+  border-right: 4px solid transparent;
 }
+.sd-item.low { border-right-color: #f59e0b; }
+.sd-item.out { border-right-color: #dc2626; }
 .sd-item-img {
-  width: 62px; height: 62px; border-radius: 11px;
+  width: 58px; height: 58px; border-radius: 11px;
   background: #f1f5f9; overflow: hidden; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center; font-size: 24px;
+  display: flex; align-items: center; justify-content: center; font-size: 22px;
 }
 .sd-item-img img { width: 100%; height: 100%; object-fit: cover; }
 .sd-item-info { flex: 1; min-width: 0; }
-.sd-item-name { font-size: 14.5px; font-weight: 800; color: #0A1D37; }
-.sd-item-sku { color: #94a3b8; font-weight: 600; font-size: 12px; }
-.sd-item-price { font-size: 13.5px; color: #b48114; font-weight: 700; margin-top: 3px; }
-.sd-item-actions { display: flex; gap: 6px; }
+.sd-item-name {
+  font-size: 14px; font-weight: 800; color: #0A1D37;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.sd-item-sku { color: #94a3b8; font-weight: 600; font-size: 11.5px; }
+.sd-badge-out {
+  background: #fee2e2; color: #dc2626;
+  font-size: 10.5px; font-weight: 800;
+  padding: 2px 9px; border-radius: 999px;
+}
+.sd-badge-low {
+  background: #fef3c7; color: #b45309;
+  font-size: 10.5px; font-weight: 800;
+  padding: 2px 9px; border-radius: 999px;
+}
+.sd-item-price { font-size: 13px; color: #b48114; font-weight: 700; margin-top: 3px; }
+
+/* ---- عداد الكمية ---- */
+.sd-qty {
+  display: flex; align-items: center; gap: 6px;
+  background: #f8fafc; border-radius: 11px; padding: 5px 7px;
+  flex-shrink: 0;
+}
+.sd-qty-btn {
+  width: 32px; height: 32px;
+  border: 1.5px solid #e2e8f0; background: #fff;
+  border-radius: 9px; font-size: 17px; font-weight: 800;
+  color: #dc2626; cursor: pointer; font-family: inherit;
+  display: flex; align-items: center; justify-content: center;
+}
+.sd-qty-btn.plus { color: #16a34a; }
+.sd-qty-btn:disabled { opacity: .35; cursor: default; }
+.sd-qty-num {
+  min-width: 30px; text-align: center;
+  font-size: 15.5px; font-weight: 800; color: #0A1D37;
+}
+.sd-qty-num.low { color: #d97706; }
+.sd-qty-num.out { color: #dc2626; }
+
+.sd-item-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .sd-item-actions button {
   background: #f1f5f9; border: none; border-radius: 9px;
-  width: 38px; height: 38px; font-size: 16px; cursor: pointer;
+  width: 36px; height: 36px; font-size: 15px; cursor: pointer;
 }
 
+/* ---- النموذج ---- */
 .sd-form { background: #fff; border-radius: 18px; padding: 18px; box-shadow: 0 2px 10px rgba(10,29,55,.08); }
 .sd-form-title { font-size: 18px; font-weight: 800; color: #0A1D37; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .sd-sku-preview {

@@ -62,7 +62,17 @@ function resolveType(raw) {
   return 'general'
 }
 
-const SIZE_PRESETS = ['S', 'M', 'L', 'XL', 'XXL', '38', '40', '42']
+// المقاسات الحرفية (ملابس)
+const SIZE_LETTERS = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL']
+// المقاسات الرقمية (أحذية وملابس): 34 حتى 56
+const SIZE_NUMBERS = Array.from({ length: 23 }, (_, i) => String(34 + i))
+// الفئة المستهدفة
+const AUDIENCES = [
+  { id: 'women', label: 'نسائي', icon: '👩' },
+  { id: 'men', label: 'رجالي', icon: '👨' },
+  { id: 'boys', label: 'ولادي', icon: '👦' },
+  { id: 'girls', label: 'بناتي', icon: '👧' },
+]
 const COLOR_PRESETS = ['أسود', 'أبيض', 'أحمر', 'أزرق', 'أخضر', 'بيج', 'ذهبي', 'وردي']
 
 function compressImage(file) {
@@ -105,8 +115,19 @@ function blobToDataURL(blob) {
   })
 }
 
-// كمية المنتج (يدعم الأعمدة الثلاثة القديمة)
+// مخزون المقاسات إن وجد: { S: 3, M: 5 }
+function sizeStockOf(p) {
+  let v = p.variants
+  try { if (typeof v === 'string') v = JSON.parse(v) } catch (e) { v = null }
+  const ss = v?.sizeStock
+  if (ss && typeof ss === 'object' && Object.keys(ss).length > 0) return ss
+  return null
+}
+
+// كمية المنتج: مجموع مخزون المقاسات إن وجد، وإلا الأعمدة القديمة
 function qtyOf(p) {
+  const ss = sizeStockOf(p)
+  if (ss) return Object.values(ss).reduce((s, n) => s + (Number(n) || 0), 0)
   const q = p.stock_quantity ?? p.quantity ?? p.stock
   return Number(q) || 0
 }
@@ -128,7 +149,9 @@ export default function SellerDashboard() {
     name: '', description: '', category: '',
     price: '', currency: 'IQD', quantity: '1',
     hide_price: false, contact_phone: '', video_url: '',
+    audience: '', // الفئة المستهدفة: نسائي/رجالي/ولادي/بناتي
     sizes: [], colors: [], images: [],
+    sizeStock: {}, // مخزون كل مقاس: { S: 3, M: 5 }
   }
   const [f, setF] = useState(empty)
 
@@ -203,7 +226,6 @@ export default function SellerDashboard() {
   async function changeQty(p, delta) {
     const newQty = Math.max(0, qtyOf(p) + delta)
     setSavingQty(p.id)
-    // تحديث فوري بالواجهة (تفاؤلي)
     setProducts((prev) =>
       prev.map((x) =>
         x.id === p.id
@@ -223,6 +245,41 @@ export default function SellerDashboard() {
     if (error) {
       console.error(error)
       setMsg({ type: 'err', text: 'تعذر تحديث الكمية — حاول مرة ثانية' })
+      await fetchProducts()
+    }
+    setSavingQty(null)
+  }
+
+  // ===== تعديل مخزون مقاس محدد [−] [+] =====
+  async function changeSizeQty(p, size, delta) {
+    let v = p.variants
+    try { if (typeof v === 'string') v = JSON.parse(v) } catch (e) { v = {} }
+    const ss = { ...(v?.sizeStock || {}) }
+    ss[size] = Math.max(0, (Number(ss[size]) || 0) + delta)
+    const newVariants = { ...v, sizeStock: ss }
+    const total = Object.values(ss).reduce((s, n) => s + (Number(n) || 0), 0)
+
+    setSavingQty(p.id)
+    setProducts((prev) =>
+      prev.map((x) =>
+        x.id === p.id
+          ? { ...x, variants: newVariants, stock_quantity: total, quantity: total, stock: total }
+          : x
+      )
+    )
+    const { error } = await supabase
+      .from('products')
+      .update({
+        variants: newVariants,
+        stock_quantity: total,
+        quantity: total,
+        stock: total,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', p.id)
+    if (error) {
+      console.error(error)
+      setMsg({ type: 'err', text: 'تعذر تحديث مخزون المقاس — حاول مرة ثانية' })
       await fetchProducts()
     }
     setSavingQty(null)
@@ -305,6 +362,8 @@ export default function SellerDashboard() {
       video_url: p.video_url || '',
       sizes: Array.isArray(v?.sizes) ? v.sizes : [],
       colors: Array.isArray(v?.colors) ? v.colors : [],
+      audience: v?.audience || '',
+      sizeStock: (v?.sizeStock && typeof v.sizeStock === 'object') ? { ...v.sizeStock } : {},
       images: imgs,
     })
     setEditingId(p.id)
@@ -327,6 +386,16 @@ export default function SellerDashboard() {
         ? products.find((p) => p.id === editingId)?.sku || nextSku(f.category)
         : nextSku(f.category)
 
+      // مخزون المقاسات: فقط للمقاسات المختارة
+      const cleanSizeStock = {}
+      for (const s of f.sizes) {
+        cleanSizeStock[s] = Number(f.sizeStock[s]) || 0
+      }
+      const hasSizeStock = f.sizes.length > 0
+      const totalQty = hasSizeStock
+        ? Object.values(cleanSizeStock).reduce((s, n) => s + n, 0)
+        : Number(f.quantity) || 0
+
       const row = {
         name: f.name.trim(),
         name_ar: f.name.trim(),
@@ -339,11 +408,16 @@ export default function SellerDashboard() {
         hide_price: f.hide_price,
         contact_phone: f.contact_phone.trim() || null,
         video_url: f.video_url.trim() || null,
-        quantity: Number(f.quantity) || 0,
-        stock_quantity: Number(f.quantity) || 0,
-        stock: Number(f.quantity) || 0,
-        variants: (f.sizes.length || f.colors.length)
-          ? { sizes: f.sizes, colors: f.colors }
+        quantity: totalQty,
+        stock_quantity: totalQty,
+        stock: totalQty,
+        variants: (f.sizes.length || f.colors.length || f.audience)
+          ? {
+              sizes: f.sizes,
+              colors: f.colors,
+              ...(f.audience ? { audience: f.audience } : {}),
+              ...(hasSizeStock ? { sizeStock: cleanSizeStock } : {}),
+            }
           : null,
         images: imageUrls,
         image_url: imageUrls[0] || null,
@@ -488,7 +562,7 @@ export default function SellerDashboard() {
                 <option value="USD">$ دولار</option>
               </select>
             </div>
-            {trackStock && (
+            {trackStock && f.sizes.length === 0 && (
               <div style={{ flex: 1 }}>
                 <label className="sd-label">الكمية</label>
                 <input className="sd-input" type="number" inputMode="numeric" value={f.quantity}
@@ -512,14 +586,65 @@ export default function SellerDashboard() {
 
           {showVariants && (
             <>
-              <label className="sd-label">المقاسات المتوفرة</label>
+              {/* ===== الفئة المستهدفة ===== */}
+              <label className="sd-label">الفئة المستهدفة</label>
               <div className="sd-chips">
-                {SIZE_PRESETS.map((s) => (
+                {AUDIENCES.map((a) => (
+                  <button key={a.id} type="button"
+                    className={`sd-chip ${f.audience === a.id ? 'active' : ''}`}
+                    onClick={() => setF({ ...f, audience: f.audience === a.id ? '' : a.id })}>
+                    {a.icon} {a.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* ===== المقاسات الحرفية ===== */}
+              <label className="sd-label">المقاسات الحرفية (ملابس)</label>
+              <div className="sd-chips">
+                {SIZE_LETTERS.map((s) => (
                   <button key={s} type="button"
                     className={`sd-chip ${f.sizes.includes(s) ? 'active' : ''}`}
                     onClick={() => toggleChip('sizes', s)}>{s}</button>
                 ))}
               </div>
+
+              {/* ===== المقاسات الرقمية ===== */}
+              <label className="sd-label">المقاسات الرقمية (أحذية وملابس) 34-56</label>
+              <div className="sd-chips sd-chips-nums">
+                {SIZE_NUMBERS.map((s) => (
+                  <button key={s} type="button"
+                    className={`sd-chip sd-chip-num ${f.sizes.includes(s) ? 'active' : ''}`}
+                    onClick={() => toggleChip('sizes', s)}>{s}</button>
+                ))}
+              </div>
+
+              {/* ===== مخزون كل مقاس ===== */}
+              {trackStock && f.sizes.length > 0 && (
+                <div className="sd-sizestock">
+                  <div className="sd-sizestock-title">📦 الكمية المتوفرة لكل مقاس:</div>
+                  <div className="sd-sizestock-grid">
+                    {f.sizes.map((s) => (
+                      <div key={s} className="sd-sizestock-item">
+                        <span className="sd-sizestock-size">{s}</span>
+                        <input
+                          className="sd-input sd-sizestock-input"
+                          type="number" inputMode="numeric" min="0"
+                          value={f.sizeStock[s] ?? ''}
+                          onChange={(e) =>
+                            setF({ ...f, sizeStock: { ...f.sizeStock, [s]: e.target.value } })
+                          }
+                          placeholder="0"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="sd-sizestock-total">
+                    الإجمالي: <b>{f.sizes.reduce((sum, s) => sum + (Number(f.sizeStock[s]) || 0), 0)}</b> قطعة
+                    <span className="sd-sizestock-note"> — يُحسب تلقائياً</span>
+                  </div>
+                </div>
+              )}
+
               <label className="sd-label">الألوان المتوفرة</label>
               <div className="sd-chips">
                 {COLOR_PRESETS.map((c) => (
@@ -647,6 +772,12 @@ export default function SellerDashboard() {
                     <div className="sd-item-name">
                       {p.name || p.title}
                       {p.sku && <span className="sd-item-sku"> {p.sku}#</span>}
+                      {(() => {
+                        let v = p.variants
+                        try { if (typeof v === 'string') v = JSON.parse(v) } catch (e) { v = null }
+                        const a = AUDIENCES.find((x) => x.id === v?.audience)
+                        return a ? <span className="sd-badge-aud">{a.icon} {a.label}</span> : null
+                      })()}
                       {trackStock && qty === 0 && <span className="sd-badge-out">نفد</span>}
                       {trackStock && qty > 0 && qty <= LOW_STOCK && <span className="sd-badge-low">منخفض</span>}
                     </div>
@@ -657,26 +788,59 @@ export default function SellerDashboard() {
                     </div>
                   </div>
 
-                  {/* ===== عداد المخزون [−] الكمية [+] ===== */}
-                  {trackStock && (
-                    <div className="sd-qty">
-                      <button
-                        className="sd-qty-btn"
-                        disabled={savingQty === p.id || qty === 0}
-                        onClick={() => changeQty(p, -1)}
-                        title="بيع / إنقاص قطعة"
-                      >−</button>
-                      <span className={`sd-qty-num ${stockClass}`}>
-                        {savingQty === p.id ? '⋯' : qty}
-                      </span>
-                      <button
-                        className="sd-qty-btn plus"
-                        disabled={savingQty === p.id}
-                        onClick={() => changeQty(p, +1)}
-                        title="إضافة قطعة للمخزون"
-                      >+</button>
-                    </div>
-                  )}
+                  {/* ===== عداد المخزون ===== */}
+                  {trackStock && (() => {
+                    const ss = sizeStockOf(p)
+                    if (ss) {
+                      // عدادات لكل مقاس
+                      return (
+                        <div className="sd-sizes-qty">
+                          {Object.entries(ss).map(([size, n]) => {
+                            const sq = Number(n) || 0
+                            return (
+                              <div key={size} className={`sd-size-cell ${sq === 0 ? 'out' : sq <= LOW_STOCK ? 'low' : ''}`}>
+                                <span className="sd-size-name">{size}</span>
+                                <div className="sd-size-controls">
+                                  <button
+                                    disabled={savingQty === p.id || sq === 0}
+                                    onClick={() => changeSizeQty(p, size, -1)}
+                                    title={`بيع قطعة مقاس ${size}`}
+                                  >−</button>
+                                  <span>{sq}</span>
+                                  <button
+                                    className="plus"
+                                    disabled={savingQty === p.id}
+                                    onClick={() => changeSizeQty(p, size, +1)}
+                                    title={`إضافة قطعة مقاس ${size}`}
+                                  >+</button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )
+                    }
+                    // عداد إجمالي (بدون مقاسات)
+                    return (
+                      <div className="sd-qty">
+                        <button
+                          className="sd-qty-btn"
+                          disabled={savingQty === p.id || qty === 0}
+                          onClick={() => changeQty(p, -1)}
+                          title="بيع / إنقاص قطعة"
+                        >−</button>
+                        <span className={`sd-qty-num ${stockClass}`}>
+                          {savingQty === p.id ? '⋯' : qty}
+                        </span>
+                        <button
+                          className="sd-qty-btn plus"
+                          disabled={savingQty === p.id}
+                          onClick={() => changeQty(p, +1)}
+                          title="إضافة قطعة للمخزون"
+                        >+</button>
+                      </div>
+                    )
+                  })()}
 
                   <div className="sd-item-actions">
                     <button onClick={() => startEdit(p)} title="تعديل">✏️</button>
@@ -843,6 +1007,15 @@ const CSS = `
   font-size: 10.5px; font-weight: 800;
   padding: 2px 9px; border-radius: 999px;
 }
+.sd-badge-aud {
+  background: #eff6ff; color: #1d4ed8;
+  font-size: 10.5px; font-weight: 800;
+  padding: 2px 9px; border-radius: 999px;
+}
+
+/* ---- المقاسات الرقمية (شبكة مضغوطة) ---- */
+.sd-chips-nums { gap: 6px; }
+.sd-chip-num { padding: 6px 0; min-width: 44px; text-align: center; font-size: 13px; }
 .sd-item-price { font-size: 13px; color: #b48114; font-weight: 700; margin-top: 3px; }
 
 /* ---- عداد الكمية ---- */
@@ -850,6 +1023,64 @@ const CSS = `
   display: flex; align-items: center; gap: 6px;
   background: #f8fafc; border-radius: 11px; padding: 5px 7px;
   flex-shrink: 0;
+}
+
+/* ---- مخزون المقاسات بالنموذج ---- */
+.sd-sizestock {
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 13px;
+  padding: 13px;
+  margin-top: 10px;
+}
+.sd-sizestock-title { font-size: 13px; font-weight: 800; color: #334155; margin-bottom: 10px; }
+.sd-sizestock-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+  gap: 10px;
+}
+.sd-sizestock-item { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.sd-sizestock-size {
+  background: #0A1D37; color: #F5B93E;
+  font-size: 12.5px; font-weight: 800;
+  padding: 3px 14px; border-radius: 999px;
+}
+.sd-sizestock-input { text-align: center; padding: 9px 6px; margin: 0; }
+.sd-sizestock-total { font-size: 13px; color: #0A1D37; margin-top: 10px; }
+.sd-sizestock-note { color: #94a3b8; font-size: 11.5px; }
+
+/* ---- عدادات المقاسات بالقائمة ---- */
+.sd-sizes-qty {
+  display: flex; gap: 6px; flex-wrap: wrap;
+  flex-shrink: 0; max-width: 300px;
+  justify-content: flex-end;
+}
+.sd-size-cell {
+  background: #f8fafc;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 4px 6px;
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+}
+.sd-size-cell.low { border-color: #f59e0b; background: #fffbeb; }
+.sd-size-cell.out { border-color: #fca5a5; background: #fef2f2; }
+.sd-size-name { font-size: 10.5px; font-weight: 800; color: #64748b; }
+.sd-size-cell.low .sd-size-name { color: #b45309; }
+.sd-size-cell.out .sd-size-name { color: #dc2626; }
+.sd-size-controls { display: flex; align-items: center; gap: 4px; }
+.sd-size-controls button {
+  width: 22px; height: 22px;
+  border: 1px solid #e2e8f0; background: #fff;
+  border-radius: 7px; font-size: 13px; font-weight: 800;
+  color: #dc2626; cursor: pointer; font-family: inherit;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.sd-size-controls button.plus { color: #16a34a; }
+.sd-size-controls button:disabled { opacity: .35; cursor: default; }
+.sd-size-controls span {
+  min-width: 20px; text-align: center;
+  font-size: 13px; font-weight: 800; color: #0A1D37;
 }
 .sd-qty-btn {
   width: 32px; height: 32px;

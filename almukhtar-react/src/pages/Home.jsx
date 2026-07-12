@@ -92,6 +92,12 @@ export default function Home() {
     })
   }, [stores, search, type, province])
 
+  async function logout() {
+    await supabase.auth.signOut()
+    setUser(null)
+    window.location.reload()
+  }
+
   return (
     <div dir="rtl" className="hm-page">
       <style>{CSS}</style>
@@ -105,7 +111,10 @@ export default function Home() {
           </div>
           <div className="hm-nav-actions">
             {user ? (
-              <Link to="/dashboard" className="hm-btn-outline">لوحة التحكم</Link>
+              <>
+                <Link to="/dashboard" className="hm-btn-outline">لوحة التحكم</Link>
+                <button onClick={logout} className="hm-logout">تسجيل خروج</button>
+              </>
             ) : (
               <>
                 <Link to="/login" className="hm-link">تسجيل الدخول</Link>
@@ -263,6 +272,12 @@ const CSS = `
   padding: 9px 18px; border-radius: 11px;
   font-size: 14px; font-weight: 800; text-decoration: none;
 }
+.hm-logout {
+  background: none; border: none;
+  color: #94a3b8; font-size: 13px; font-weight: 700;
+  cursor: pointer; font-family: inherit; padding: 6px 4px;
+}
+.hm-logout:hover { color: #fff; }
 
 /* ---- الهيرو ---- */
 .hm-hero {

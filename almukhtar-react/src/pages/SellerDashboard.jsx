@@ -221,6 +221,13 @@ export default function SellerDashboard() {
     setTimeout(() => setToast(null), 1600)
   }
 
+  // ===== الإحصائيات والأداء =====
+  const [view, setView] = useState('products') // products | stats
+  const [period, setPeriod] = useState(7) // بالأيام: 1 | 7 | 30 | 90
+  const [statsData, setStatsData] = useState(null)
+  const [loadingStats, setLoadingStats] = useState(false)
+  const [chartOn, setChartOn] = useState({ store_view: true, product_view: true, whatsapp_click: true, order_created: false })
+
   const empty = {
     name: '', description: '', category: '',
     price: '', currency: 'IQD', quantity: '1',
@@ -409,6 +416,133 @@ export default function SellerDashboard() {
   function thresholdOf(p) {
     const t = Number(p.low_stock_threshold)
     return Number.isFinite(t) && t > 0 ? t : LOW_STOCK
+  }
+
+  // ===== تحميل وتجميع الإحصائيات (بيانات حقيقية فقط) =====
+  useEffect(() => {
+    if (view === 'stats' && store) loadStats()
+  }, [view, period, store])
+
+  async function loadStats() {
+    setLoadingStats(true)
+    try {
+      const now = Date.now()
+      const start = new Date(now - period * 864e5)
+      const prevStart = new Date(now - 2 * period * 864e5)
+
+      // الأحداث: الفترة الحالية + السابقة للمقارنة
+      const { data: evAll } = await supabase
+        .from('analytics_events').select('*')
+        .eq('store_id', store.id)
+        .gte('created_at', prevStart.toISOString())
+      const events = evAll || []
+      const cur = events.filter((e) => new Date(e.created_at) >= start)
+      const prev = events.filter((e) => new Date(e.created_at) < start)
+
+      const count = (list, type) => list.filter((e) => e.event_type === type).length
+      const uniq = (list) => new Set(list.filter((e) => e.event_type === 'store_view').map((e) => e.session_id)).size
+
+      // المتابعون (جدول قد يكون فارغاً — أرقام حقيقية)
+      let followers = 0
+      try {
+        const { count: fc } = await supabase
+          .from('store_followers').select('*', { count: 'exact', head: true })
+          .eq('store_id', store.id)
+        followers = fc || 0
+      } catch (e) { /* الجدول غير منشأ بعد */ }
+
+      // الطلبات وقيمتها
+      let ordersCur = 0, ordersPrev = 0, sales = 0
+      try {
+        const { data: ords } = await supabase
+          .from('orders').select('*')
+          .eq('store_id', store.id)
+          .gte('created_at', prevStart.toISOString())
+        for (const o of ords || []) {
+          const inCur = new Date(o.created_at) >= start
+          if (inCur) {
+            ordersCur++
+            sales += Number(o.total ?? o.total_amount ?? o.amount ?? 0) || 0
+          } else ordersPrev++
+        }
+      } catch (e) { /* لا يوجد جدول/أعمدة بعد */ }
+
+      // السلاسل اليومية للرسم البياني
+      const days = []
+      for (let i = period - 1; i >= 0; i--) {
+        const d = new Date(now - i * 864e5)
+        days.push(d.toISOString().slice(0, 10))
+      }
+      const daily = days.map((day) => {
+        const dayEv = cur.filter((e) => (e.created_at || '').slice(0, 10) === day)
+        return {
+          day,
+          store_view: count(dayEv, 'store_view'),
+          product_view: count(dayEv, 'product_view'),
+          whatsapp_click: count(dayEv, 'whatsapp_click'),
+          order_created: count(dayEv, 'order_created'),
+        }
+      })
+
+      // أفضل المنتجات أداءً
+      const perProduct = {}
+      for (const e of cur) {
+        if (!e.product_id) continue
+        perProduct[e.product_id] = perProduct[e.product_id] || { views: 0, wa: 0 }
+        if (e.event_type === 'product_view') perProduct[e.product_id].views++
+        if (e.event_type === 'whatsapp_click') perProduct[e.product_id].wa++
+      }
+      const topProducts = Object.entries(perProduct)
+        .map(([pid, s]) => {
+          const p = products.find((x) => x.id === pid)
+          return p ? { p, ...s, conv: s.views ? Math.round((s.wa / s.views) * 100) : 0 } : null
+        })
+        .filter(Boolean)
+        .sort((a, b) => b.views - a.views)
+        .slice(0, 8)
+
+      // مصادر الزيارات
+      const srcMap = {}
+      for (const e of cur.filter((x) => x.event_type === 'store_view')) {
+        const s = e.source || 'direct'
+        srcMap[s] = (srcMap[s] || 0) + 1
+      }
+      const sources = Object.entries(srcMap).sort((a, b) => b[1] - a[1])
+
+      setStatsData({
+        cur: {
+          store_view: count(cur, 'store_view'),
+          product_view: count(cur, 'product_view'),
+          unique: uniq(cur),
+          whatsapp_click: count(cur, 'whatsapp_click'),
+          phone_click: count(cur, 'phone_click'),
+          shares: count(cur, 'store_share') + count(cur, 'product_share'),
+          orders: ordersCur,
+          sales,
+          followers,
+        },
+        prev: {
+          store_view: count(prev, 'store_view'),
+          product_view: count(prev, 'product_view'),
+          unique: uniq(prev),
+          whatsapp_click: count(prev, 'whatsapp_click'),
+          phone_click: count(prev, 'phone_click'),
+          shares: count(prev, 'store_share') + count(prev, 'product_share'),
+          orders: ordersPrev,
+        },
+        daily, topProducts, sources,
+      })
+    } catch (err) {
+      console.error(err)
+      setMsg({ type: 'err', text: 'تعذر تحميل الإحصائيات' })
+    }
+    setLoadingStats(false)
+  }
+
+  // نسبة التغير مقارنة بالفترة السابقة
+  function delta(cur, prev) {
+    if (prev === 0) return cur > 0 ? 100 : null
+    return Math.round(((cur - prev) / prev) * 100)
   }
 
   // ===== تعديل الكمية السريع [−] [+] =====
@@ -709,6 +843,20 @@ export default function SellerDashboard() {
       {msg && <div className={`sd-msg ${msg.type}`}>{msg.text}</div>}
       {toast && <div className="sd-toast">{toast}</div>}
 
+      {/* ===== التبويبات ===== */}
+      {!loading && !showForm && (
+        <div className="sd-tabs">
+          <button className={`sd-tab ${view === 'products' ? 'active' : ''}`}
+            onClick={() => setView('products')}>
+            📦 {isRealestate ? 'عقاراتي' : isService ? 'خدماتي' : 'منتجاتي'}
+          </button>
+          <button className={`sd-tab ${view === 'stats' ? 'active' : ''}`}
+            onClick={() => setView('stats')}>
+            📊 الإحصائيات والأداء
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div className="sd-state">⏳ جاري التحميل...</div>
       ) : showForm ? (
@@ -903,6 +1051,159 @@ export default function SellerDashboard() {
               إلغاء
             </button>
           </div>
+        </div>
+      ) : view === 'stats' ? (
+        /* ================= الإحصائيات والأداء ================= */
+        <div className="sd-list-wrap">
+
+          {/* فلترة الفترة الزمنية */}
+          <div className="sd-filters" style={{ marginBottom: 16 }}>
+            {[{ d: 1, l: 'اليوم' }, { d: 7, l: 'آخر 7 أيام' }, { d: 30, l: 'آخر 30 يوم' }, { d: 90, l: 'آخر 3 أشهر' }].map((o) => (
+              <button key={o.d}
+                className={`sd-filter ${period === o.d ? 'active' : ''}`}
+                onClick={() => setPeriod(o.d)}>{o.l}</button>
+            ))}
+          </div>
+
+          {loadingStats || !statsData ? (
+            <div className="sd-state">⏳ جاري تحميل الإحصائيات...</div>
+          ) : (() => {
+            const S = statsData
+            const conv = S.cur.store_view ? Math.round((S.cur.whatsapp_click / S.cur.store_view) * 100) : 0
+            const convPrev = S.prev.store_view ? Math.round((S.prev.whatsapp_click / S.prev.store_view) * 100) : 0
+            const noData = S.cur.store_view === 0 && S.cur.product_view === 0 && S.cur.whatsapp_click === 0
+
+            const CARDS = [
+              { label: 'زيارات المتجر', val: S.cur.store_view, d: delta(S.cur.store_view, S.prev.store_view) },
+              { label: 'زوار فريدون', val: S.cur.unique, d: delta(S.cur.unique, S.prev.unique) },
+              { label: 'مشاهدات المنتجات', val: S.cur.product_view, d: delta(S.cur.product_view, S.prev.product_view) },
+              { label: 'نقرات واتساب 💬', val: S.cur.whatsapp_click, d: delta(S.cur.whatsapp_click, S.prev.whatsapp_click), hot: true },
+              { label: 'نقرات الهاتف 📞', val: S.cur.phone_click, d: delta(S.cur.phone_click, S.prev.phone_click) },
+              { label: 'مشاركات المتجر 🔗', val: S.cur.shares, d: delta(S.cur.shares, S.prev.shares) },
+              { label: 'معدل التحويل', val: conv + '%', d: delta(conv, convPrev), hint: 'واتساب ÷ زيارات' },
+              { label: 'الطلبات', val: S.cur.orders, d: delta(S.cur.orders, S.prev.orders) },
+              { label: 'قيمة المبيعات', val: S.cur.sales.toLocaleString('en-US') + ' د.ع', d: null },
+              { label: 'المتابعون ⭐', val: S.cur.followers, d: null },
+            ]
+
+            const SRC_LABELS = {
+              direct: '🔗 مباشر', internal: '🏠 من داخل المنصة', facebook: '📘 فيسبوك',
+              instagram: '📸 انستغرام', tiktok: '🎵 تيك توك', whatsapp: '💬 واتساب',
+              telegram: '✈️ تيليغرام', search: '🔍 محركات البحث', other: '🌐 أخرى',
+            }
+            const srcTotal = S.sources.reduce((s, [, n]) => s + n, 0) || 1
+
+            const SERIES = [
+              { id: 'store_view', label: 'زيارات', color: '#2563EB' },
+              { id: 'product_view', label: 'مشاهدات', color: '#8B5CF6' },
+              { id: 'whatsapp_click', label: 'واتساب', color: '#16A34A' },
+              { id: 'order_created', label: 'طلبات', color: '#F59E0B' },
+            ]
+            const activeSeries = SERIES.filter((s) => chartOn[s.id])
+            const maxY = Math.max(1, ...S.daily.flatMap((d) => activeSeries.map((s) => d[s.id])))
+            const W = 600, H = 150, PAD = 8
+            const xOf = (i) => S.daily.length === 1 ? W / 2 : PAD + (i * (W - PAD * 2)) / (S.daily.length - 1)
+            const yOf = (v) => H - PAD - (v / maxY) * (H - PAD * 2)
+
+            return (
+              <>
+                {noData && (
+                  <div className="sd-hint" style={{ marginBottom: 14 }}>
+                    📣 لا توجد بيانات لهذه الفترة بعد — شارك رابط متجرك على السوشيال ميديا وستظهر الزيارات هنا فوراً
+                  </div>
+                )}
+
+                {/* بطاقات المؤشرات */}
+                <div className="sd-an-cards">
+                  {CARDS.map((c) => (
+                    <div key={c.label} className={`sd-an-card ${c.hot ? 'hot' : ''}`}>
+                      <div className="sd-an-val">{c.val}</div>
+                      <div className="sd-an-label">{c.label}</div>
+                      {c.d !== null && c.d !== undefined ? (
+                        <div className={`sd-an-delta ${c.d >= 0 ? 'up' : 'down'}`}>
+                          {c.d >= 0 ? '↑' : '↓'} {Math.abs(c.d)}%
+                          <span className="sd-an-vs"> عن الفترة السابقة</span>
+                        </div>
+                      ) : c.hint ? (
+                        <div className="sd-an-vs">{c.hint}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+
+                {/* الرسم البياني */}
+                <div className="sd-an-box">
+                  <div className="sd-an-box-title">📈 الأداء اليومي</div>
+                  <div className="sd-an-legend">
+                    {SERIES.map((s) => (
+                      <button key={s.id}
+                        className={`sd-an-leg ${chartOn[s.id] ? 'on' : ''}`}
+                        style={chartOn[s.id] ? { borderColor: s.color, color: s.color } : {}}
+                        onClick={() => setChartOn({ ...chartOn, [s.id]: !chartOn[s.id] })}>
+                        <span className="sd-an-dot" style={{ background: s.color }} /> {s.label}
+                      </button>
+                    ))}
+                  </div>
+                  <svg viewBox={`0 0 ${W} ${H}`} className="sd-an-chart" preserveAspectRatio="none">
+                    {[0.25, 0.5, 0.75].map((f) => (
+                      <line key={f} x1={PAD} x2={W - PAD} y1={H * f} y2={H * f} stroke="#f1f5f9" strokeWidth="1" />
+                    ))}
+                    {activeSeries.map((s) => (
+                      <polyline key={s.id}
+                        fill="none" stroke={s.color} strokeWidth="2.5"
+                        strokeLinejoin="round" strokeLinecap="round"
+                        points={S.daily.map((d, i) => `${xOf(i)},${yOf(d[s.id])}`).join(' ')} />
+                    ))}
+                  </svg>
+                  <div className="sd-an-xaxis">
+                    <span>{S.daily[0]?.day.slice(5)}</span>
+                    <span>{S.daily[S.daily.length - 1]?.day.slice(5)}</span>
+                  </div>
+                </div>
+
+                {/* أفضل المنتجات أداءً */}
+                <div className="sd-an-box">
+                  <div className="sd-an-box-title">🏆 أفضل المنتجات أداءً</div>
+                  {S.topProducts.length === 0 ? (
+                    <div className="sd-an-empty">لا توجد مشاهدات منتجات بهذه الفترة بعد</div>
+                  ) : (
+                    S.topProducts.map((t, i) => (
+                      <div key={t.p.id} className="sd-an-toprow">
+                        <span className="sd-an-rank">{i + 1}</span>
+                        <div className="sd-item-img" style={{ width: 44, height: 44 }}>
+                          {firstImg(t.p) ? <img src={firstImg(t.p)} alt="" /> : <span>🖼️</span>}
+                        </div>
+                        <div className="sd-an-topinfo">
+                          <div className="sd-an-topname">{t.p.name}</div>
+                          <div className="sd-an-topmeta">
+                            👁 {t.views} مشاهدة · 💬 {t.wa} واتساب · تحويل {t.conv}% · 📦 متبقي {qtyOf(t.p)}
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* مصادر الزيارات */}
+                <div className="sd-an-box">
+                  <div className="sd-an-box-title">🧭 من أين يأتي زوارك؟</div>
+                  {S.sources.length === 0 ? (
+                    <div className="sd-an-empty">لا توجد زيارات بهذه الفترة بعد</div>
+                  ) : (
+                    S.sources.map(([src, n]) => (
+                      <div key={src} className="sd-an-srcrow">
+                        <span className="sd-an-srclabel">{SRC_LABELS[src] || src}</span>
+                        <div className="sd-an-srcbar">
+                          <div className="sd-an-srcfill" style={{ width: `${Math.round((n / srcTotal) * 100)}%` }} />
+                        </div>
+                        <span className="sd-an-srcnum">{n} ({Math.round((n / srcTotal) * 100)}%)</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </>
+            )
+          })()}
         </div>
       ) : (
         /* ================= اللوحة الرئيسية ================= */
@@ -1479,6 +1780,90 @@ const CSS = `
   from { opacity: 0; transform: translateX(50%) translateY(10px); }
   to   { opacity: 1; transform: translateX(50%) translateY(0); }
 }
+
+/* ---- التبويبات ---- */
+.sd-tabs {
+  max-width: 760px; margin: 16px auto 0; padding: 0 16px;
+  display: flex; gap: 8px;
+}
+.sd-tab {
+  flex: 1; background: #fff; border: 1.5px solid #e2e8f0;
+  border-radius: 13px; padding: 12px;
+  font-size: 14.5px; font-weight: 800; color: #64748b;
+  cursor: pointer; font-family: inherit;
+}
+.sd-tab.active { background: #0A1D37; border-color: #0A1D37; color: #F5B93E; }
+
+/* ---- بطاقات الإحصائيات ---- */
+.sd-an-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px; margin-bottom: 14px;
+}
+.sd-an-card {
+  background: #fff; border-radius: 14px;
+  padding: 14px 12px; text-align: center;
+  box-shadow: 0 1px 4px rgba(10,29,55,.07);
+}
+.sd-an-card.hot { border: 1.5px solid #16a34a; background: #f0fdf4; }
+.sd-an-val { font-size: 22px; font-weight: 800; color: #0A1D37; }
+.sd-an-label { font-size: 12px; color: #64748b; margin-top: 3px; }
+.sd-an-delta { font-size: 11.5px; font-weight: 800; margin-top: 5px; }
+.sd-an-delta.up { color: #16a34a; }
+.sd-an-delta.down { color: #dc2626; }
+.sd-an-vs { font-size: 10px; color: #94a3b8; font-weight: 500; }
+
+/* ---- صناديق الأقسام ---- */
+.sd-an-box {
+  background: #fff; border-radius: 16px;
+  padding: 15px; margin-bottom: 14px;
+  box-shadow: 0 1px 4px rgba(10,29,55,.07);
+}
+.sd-an-box-title { font-size: 15px; font-weight: 800; color: #0A1D37; margin-bottom: 12px; }
+.sd-an-empty { font-size: 13px; color: #94a3b8; text-align: center; padding: 16px 0; }
+
+/* ---- الرسم البياني ---- */
+.sd-an-legend { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.sd-an-leg {
+  display: flex; align-items: center; gap: 6px;
+  border: 1.5px solid #e2e8f0; background: #fff;
+  border-radius: 999px; padding: 5px 12px;
+  font-size: 12px; font-weight: 700; color: #94a3b8;
+  cursor: pointer; font-family: inherit;
+}
+.sd-an-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.sd-an-leg:not(.on) .sd-an-dot { opacity: .3; }
+.sd-an-chart { width: 100%; height: 150px; display: block; }
+.sd-an-xaxis {
+  display: flex; justify-content: space-between;
+  font-size: 10.5px; color: #94a3b8; direction: ltr;
+}
+
+/* ---- أفضل المنتجات ---- */
+.sd-an-toprow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0; border-bottom: 1px dashed #f1f5f9;
+}
+.sd-an-toprow:last-child { border-bottom: none; }
+.sd-an-rank {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #FFF8E8; color: #b45309;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 800; flex-shrink: 0;
+}
+.sd-an-topinfo { min-width: 0; }
+.sd-an-topname { font-size: 13.5px; font-weight: 800; color: #0A1D37; }
+.sd-an-topmeta { font-size: 11.5px; color: #64748b; margin-top: 2px; }
+
+/* ---- مصادر الزيارات ---- */
+.sd-an-srcrow { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.sd-an-srclabel { font-size: 12.5px; font-weight: 700; color: #334155; width: 140px; flex-shrink: 0; }
+.sd-an-srcbar {
+  flex: 1; height: 10px; background: #f1f5f9;
+  border-radius: 999px; overflow: hidden;
+}
+.sd-an-srcfill { height: 100%; background: linear-gradient(90deg, #F5B93E, #d97706); border-radius: 999px; }
+.sd-an-srcnum { font-size: 11.5px; color: #64748b; width: 70px; text-align: left; flex-shrink: 0; }
 .sd-size-cell {
   background: #f8fafc;
   border: 1.5px solid #e2e8f0;

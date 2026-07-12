@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
+import { track } from '../lib/analytics.js'
 
 // ================================================================
 //  نظام الثيمات — كل نوع متجر له هوية كاملة (ألوان + نصوص + فئات)
@@ -18,7 +19,7 @@ const THEMES = {
     soft: '#FFF8E8',
     announceBg: '#3B82C4',
     tagline: 'أناقة تليق بكِ',
-    announce: 'التوصيل وين ماتريد | Delivery across Iraq',
+    announce: 'التوصيل لكافة محافظات العراق | Delivery across Iraq',
     heroKicker: 'وصلنا حديثاً ✨',
     heroTitle: 'أرقى الفساتين والأزياء لهذا الموسم',
     heroCta: 'تسوقي الآن',
@@ -43,7 +44,7 @@ const THEMES = {
     accentText: '#111111',
     soft: '#F2F7F1',
     announceBg: '#2E5E46',
-    tagline: 'دلالك الموثوق في العراق',
+    tagline: 'عقارك الموثوق في العراق',
     announce: 'بيع • شراء • إيجار | خدمة معتمدة وموثوقة',
     heroKicker: 'عروض جديدة 🏠',
     heroTitle: 'أفضل العقارات المختارة بعناية',
@@ -257,6 +258,9 @@ export default function StoreFront() {
       if (bySlug.data) storeRow = bySlug.data
     }
     setStore(storeRow)
+    if (storeRow) {
+      track('store_view', { storeId: storeRow.id, ownerId: storeRow.owner_id })
+    }
 
     // 2) جلب كل المنتجات الفعالة ثم فلترة منتجات هذا المتجر
     const { data, error } = await supabase
@@ -273,10 +277,9 @@ export default function StoreFront() {
     let list = data || []
     if (storeRow) {
       const ids = [storeRow.id, storeRow.owner_id].filter(Boolean)
-      const mine = list.filter((p) =>
+      list = list.filter((p) =>
         ids.includes(p.store_id) || ids.includes(p.seller_id) || ids.includes(p.user_id)
       )
-      list = mine
     }
     setProducts(list)
     setLoading(false)
@@ -313,7 +316,11 @@ export default function StoreFront() {
     })
   }, [products, search, category])
 
-  function openProduct(p) { setSelected(p); setImgIndex(0) }
+  function openProduct(p) {
+    setSelected(p)
+    setImgIndex(0)
+    if (store) track('product_view', { storeId: store.id, productId: p.id, ownerId: store.owner_id })
+  }
   function scrollToProducts() { gridRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
 
   return (
@@ -400,17 +407,18 @@ export default function StoreFront() {
             {/* أزرار التواصل */}
             <div className="sf-pactions">
               {storeWaLink(store) && (
-                <a href={storeWaLink(store)} target="_blank" rel="noopener noreferrer" className="sf-pact sf-pact-wa">
+                <a href={storeWaLink(store)} target="_blank" rel="noopener noreferrer" className="sf-pact sf-pact-wa" onClick={() => track('whatsapp_click', { storeId: store?.id, productId: null, ownerId: store?.owner_id })} >
                   <WaIcon /> واتساب
                 </a>
               )}
               {store.phone && (
-                <a href={`tel:${store.phone}`} className="sf-pact">📞 اتصال</a>
+                <a href={`tel:${store.phone}`} className="sf-pact" onClick={() => track('phone_click', { storeId: store?.id, productId: null, ownerId: store?.owner_id })} >📞 اتصال</a>
               )}
               <button
                 className="sf-pact"
                 onClick={async () => {
                   const url = window.location.href
+                  if (store) track('store_share', { storeId: store.id, ownerId: store.owner_id })
                   const title = store.name_ar || 'متجر على المختار'
                   try {
                     if (navigator.share) await navigator.share({ title, url })
@@ -500,13 +508,13 @@ export default function StoreFront() {
                   </div>
                   {hidden ? (
                     waInq
-                      ? <a href={waInq} target="_blank" rel="noopener noreferrer" className="sf-wa-btn"><WaIcon />{T.inquireLabel}</a>
+                      ? <a href={waInq} target="_blank" rel="noopener noreferrer" className="sf-wa-btn" onClick={() => track('whatsapp_click', { storeId: store?.id, productId: p.id, ownerId: store?.owner_id })} ><WaIcon />{T.inquireLabel}</a>
                       : <span className="sf-ask">اسأل عن السعر</span>
                   ) : (
                     <>
                       <div className="sf-price">{displayPrice(p)}</div>
                       {waOrd
-                        ? <a href={waOrd} target="_blank" rel="noopener noreferrer" className="sf-buy-btn">{T.buyLabel}</a>
+                        ? <a href={waOrd} target="_blank" rel="noopener noreferrer" className="sf-buy-btn" onClick={() => track('whatsapp_click', { storeId: store?.id, productId: p.id, ownerId: store?.owner_id })} >{T.buyLabel}</a>
                         : <button className="sf-buy-btn" onClick={() => openProduct(p)}>{T.buyLabel}</button>}
                     </>
                   )}
@@ -577,6 +585,7 @@ export default function StoreFront() {
                   href={waLink(selected, selected.hide_price ? 'inquire' : 'order', T)}
                   target="_blank" rel="noopener noreferrer"
                   className="sf-wa-btn sf-wa-lg"
+                  onClick={() => track('whatsapp_click', { storeId: store?.id, productId: selected.id, ownerId: store?.owner_id })}
                 ><WaIcon /> تواصل مع البائع عبر واتساب</a>
               )}
             </div>

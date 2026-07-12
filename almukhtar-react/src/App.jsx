@@ -6,12 +6,14 @@ import SellerDashboard from './pages/SellerDashboard.jsx'
 import Store from './pages/Store.jsx'
 import Terms from './pages/Terms.jsx'
 import StoreFront from './pages/StoreFront.jsx'
+import Home from './pages/Home.jsx'
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/setup" element={<StoreSetup />} />
-        <Route path="/" element={<Landing />} />
+        <Route path="/" element={<Home />} />
+        <Route path="/welcome" element={<Landing />} />
         <Route path="/login" element={<Auth />} />
         <Route path="/register" element={<Auth />} />
         <Route path="/dashboard" element={<SellerDashboard />} />

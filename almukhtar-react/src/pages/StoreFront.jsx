@@ -2,6 +2,16 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
 import { track } from '../lib/analytics.js'
+import {
+  getCart, addToCart, updateCartQty, removeFromCart, clearCart,
+  cartCount, cartTotal, validCustomer, submitOrder, orderWhatsappText,
+} from '../lib/orders.js'
+
+const PROVINCES = [
+  'بغداد', 'البصرة', 'نينوى', 'أربيل', 'النجف', 'كربلاء', 'كركوك', 'الأنبار',
+  'ديالى', 'صلاح الدين', 'بابل', 'واسط', 'ذي قار', 'ميسان', 'المثنى',
+  'القادسية', 'دهوك', 'السليمانية',
+]
 
 // ================================================================
 //  نظام الثيمات — كل نوع متجر له هوية كاملة (ألوان + نصوص + فئات)
@@ -244,6 +254,72 @@ export default function StoreFront() {
   const [imgIndex, setImgIndex] = useState(0)
   const gridRef = useRef(null)
 
+  // ===== الطلبات والسلة =====
+  const [cart, setCart] = useState([])
+  const [checkout, setCheckout] = useState(null) // null | {step:'cart'|'form'|'done', type, items, orderNumber, queued}
+  const [customer, setCustomer] = useState({ name: '', phone: '', province: '', area: '', address: '', notes: '' })
+  const [prefDate, setPrefDate] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [orderErr, setOrderErr] = useState(null)
+  const [selSize, setSelSize] = useState(null)
+  const [selColor, setSelColor] = useState(null)
+  const [selQty, setSelQty] = useState(1)
+
+  useEffect(() => {
+    if (store) setCart(getCart(store.id))
+  }, [store])
+
+  function productToItem(p, size, color, qty) {
+    return {
+      productId: p.id,
+      name: p.name || p.title || 'منتج',
+      sku: p.sku || null,
+      img: parseImages(p)[0] || null,
+      price: p.hide_price ? 0 : Number(p.price) || 0,
+      currency: p.currency || 'IQD',
+      size: size || null,
+      color: color || null,
+      qty,
+    }
+  }
+
+  function handleAddToCart(p) {
+    const v = parseVariants(p)
+    const needSize = Array.isArray(v?.sizes) && v.sizes.length > 0
+    const needColor = Array.isArray(v?.colors) && v.colors.length > 0
+    if ((needSize && !selSize) || (needColor && !selColor)) {
+      setOrderErr(needSize && !selSize ? 'اختر القياس أولاً' : 'اختر اللون أولاً')
+      return
+    }
+    setOrderErr(null)
+    const items = addToCart(store.id, productToItem(p, selSize, selColor, selQty))
+    setCart([...items])
+    setSelected(null)
+    setSelSize(null); setSelColor(null); setSelQty(1)
+    track('add_to_cart', { storeId: store.id, productId: p.id, ownerId: store.owner_id })
+  }
+
+  function openBooking(p, type) {
+    // خدمة أو معاينة: طلب مباشر بعنصر واحد
+    setCheckout({ step: 'form', type, items: [productToItem(p, null, null, 1)] })
+    setSelected(null)
+    setOrderErr(null)
+  }
+
+  async function placeOrder() {
+    const err = validCustomer(customer)
+    if (err) { setOrderErr(err); return }
+    setOrderErr(null)
+    setSubmitting(true)
+    const meta = checkout.type !== 'product' && prefDate ? { preferred_date: prefDate } : {}
+    const res = await submitOrder({
+      store, type: checkout.type, customer, items: checkout.items, meta,
+    })
+    setSubmitting(false)
+    if (checkout.type === 'product') { clearCart(store.id); setCart([]) }
+    setCheckout({ ...checkout, step: 'done', orderNumber: res.orderNumber, queued: res.queued })
+  }
+
   useEffect(() => { loadAll() }, [slug])
 
   async function loadAll() {
@@ -288,6 +364,9 @@ export default function StoreFront() {
   // ===== الثيم حسب نوع المتجر =====
   const themeKey = resolveThemeKey(store?.store_type || store?.type || store?.category)
   const T = THEMES[themeKey]
+  const canOrder = ['fashion', 'electronics', 'general'].includes(themeKey)
+  const isServiceStore = themeKey === 'services'
+  const isRealestateStore = themeKey === 'realestate'
 
   const storeName =
     store?.name_ar || store?.name_en || (slug ? decodeURIComponent(slug) : 'المتجر')
@@ -567,19 +646,53 @@ export default function StoreFront() {
                   <div style={{ marginTop: 10 }}>
                     {Array.isArray(v.sizes) && v.sizes.length > 0 && (
                       <div className="sf-variant-row">
-                        <span className="sf-variant-label">المقاسات:</span>
-                        {v.sizes.map((x, i) => <span key={i} className="sf-chip">{x}</span>)}
+                        <span className="sf-variant-label">اختر القياس:</span>
+                        {v.sizes.map((x, i) => (
+                          <button key={i}
+                            className={`sf-chip sf-chip-btn ${selSize === x ? 'sel' : ''}`}
+                            onClick={() => setSelSize(selSize === x ? null : x)}>{x}</button>
+                        ))}
                       </div>
                     )}
                     {Array.isArray(v.colors) && v.colors.length > 0 && (
                       <div className="sf-variant-row">
-                        <span className="sf-variant-label">الألوان:</span>
-                        {v.colors.map((x, i) => <span key={i} className="sf-chip">{x}</span>)}
+                        <span className="sf-variant-label">اختر اللون:</span>
+                        {v.colors.map((x, i) => (
+                          <button key={i}
+                            className={`sf-chip sf-chip-btn ${selColor === x ? 'sel' : ''}`}
+                            onClick={() => setSelColor(selColor === x ? null : x)}>{x}</button>
+                        ))}
                       </div>
                     )}
                   </div>
                 )
               })()}
+
+              {orderErr && selected && <div className="sf-order-err">{orderErr}</div>}
+
+              {/* ===== أزرار الطلب حسب نوع المتجر ===== */}
+              {canOrder && !selected.hide_price && (
+                <div className="sf-order-row">
+                  <div className="sf-qty-pick">
+                    <button onClick={() => setSelQty(Math.max(1, selQty - 1))}>−</button>
+                    <span>{selQty}</span>
+                    <button onClick={() => setSelQty(selQty + 1)}>+</button>
+                  </div>
+                  <button className="sf-cart-btn" onClick={() => handleAddToCart(selected)}>
+                    🛒 أضف للسلة
+                  </button>
+                </div>
+              )}
+              {isServiceStore && (
+                <button className="sf-cart-btn sf-book-btn" onClick={() => openBooking(selected, 'service')}>
+                  📅 احجز هذه الخدمة
+                </button>
+              )}
+              {isRealestateStore && (
+                <button className="sf-cart-btn sf-book-btn" onClick={() => openBooking(selected, 'inspection')}>
+                  🏠 اطلب معاينة
+                </button>
+              )}
               {waLink(selected, selected.hide_price ? 'inquire' : 'order', T) && (
                 <a
                   href={waLink(selected, selected.hide_price ? 'inquire' : 'order', T)}
@@ -589,6 +702,138 @@ export default function StoreFront() {
                 ><WaIcon /> تواصل مع البائع عبر واتساب</a>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== شريط السلة العائم ===== */}
+      {canOrder && cart.length > 0 && !checkout && (
+        <button className="sf-cartbar" onClick={() => { setCheckout({ step: 'cart', type: 'product', items: cart }); setOrderErr(null) }}>
+          <span className="sf-cartbar-count">🛒 {cartCount(cart)}</span>
+          <span>إتمام الطلب</span>
+          <span className="sf-cartbar-total">{cartTotal(cart).toLocaleString('en-US')} د.ع</span>
+        </button>
+      )}
+
+      {/* ===== نافذة الطلب: السلة ← البيانات ← النجاح ===== */}
+      {checkout && (
+        <div className="sf-overlay" onClick={() => !submitting && setCheckout(null)}>
+          <div className="sf-modal sf-checkout" onClick={(e) => e.stopPropagation()}>
+            <button className="sf-close" onClick={() => setCheckout(null)}>✕</button>
+
+            {/* --- 1) مراجعة السلة --- */}
+            {checkout.step === 'cart' && (
+              <div className="sf-co-body">
+                <div className="sf-co-title">🛒 سلة الطلب</div>
+                {cart.map((x, i) => (
+                  <div key={i} className="sf-co-item">
+                    {x.img && <img src={x.img} alt="" className="sf-co-img" />}
+                    <div className="sf-co-info">
+                      <div className="sf-co-name">{x.name}</div>
+                      <div className="sf-co-meta">
+                        {[x.size, x.color].filter(Boolean).join(' / ')}
+                        {x.price > 0 && ` · ${Number(x.price).toLocaleString('en-US')} د.ع`}
+                      </div>
+                    </div>
+                    <div className="sf-qty-pick sm">
+                      <button onClick={() => setCart([...updateCartQty(store.id, i, -1)])}>−</button>
+                      <span>{x.qty}</span>
+                      <button onClick={() => setCart([...updateCartQty(store.id, i, +1)])}>+</button>
+                    </div>
+                    <button className="sf-co-del" onClick={() => {
+                      const items = removeFromCart(store.id, i)
+                      setCart([...items])
+                      if (items.length === 0) setCheckout(null)
+                    }}>🗑️</button>
+                  </div>
+                ))}
+                <div className="sf-co-total">
+                  الإجمالي: <b>{cartTotal(cart).toLocaleString('en-US')} د.ع</b>
+                </div>
+                <button className="sf-co-next" onClick={() => setCheckout({ ...checkout, step: 'form', items: cart })}>
+                  متابعة ← بيانات التوصيل
+                </button>
+              </div>
+            )}
+
+            {/* --- 2) بيانات الزبون --- */}
+            {checkout.step === 'form' && (
+              <div className="sf-co-body">
+                <div className="sf-co-title">
+                  {checkout.type === 'service' ? '📅 حجز الخدمة'
+                    : checkout.type === 'inspection' ? '🏠 طلب معاينة'
+                    : '📋 بيانات التوصيل'}
+                </div>
+                {checkout.type !== 'product' && checkout.items[0] && (
+                  <div className="sf-co-meta" style={{ marginBottom: 10 }}>
+                    {checkout.items[0].name}
+                  </div>
+                )}
+
+                <input className="sf-co-input" placeholder="الاسم الكامل *"
+                  value={customer.name}
+                  onChange={(e) => setCustomer({ ...customer, name: e.target.value })} />
+                <input className="sf-co-input" dir="ltr" inputMode="tel" placeholder="* رقم الهاتف — 07701234567"
+                  value={customer.phone}
+                  onChange={(e) => setCustomer({ ...customer, phone: e.target.value })} />
+                <select className="sf-co-input" value={customer.province}
+                  onChange={(e) => setCustomer({ ...customer, province: e.target.value })}>
+                  <option value="">المحافظة *</option>
+                  {PROVINCES.map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                {checkout.type === 'product' && (
+                  <>
+                    <input className="sf-co-input" placeholder="المنطقة"
+                      value={customer.area}
+                      onChange={(e) => setCustomer({ ...customer, area: e.target.value })} />
+                    <input className="sf-co-input" placeholder="أقرب نقطة دالة (اختياري)"
+                      value={customer.address}
+                      onChange={(e) => setCustomer({ ...customer, address: e.target.value })} />
+                  </>
+                )}
+                {checkout.type !== 'product' && (
+                  <input className="sf-co-input" type="date" value={prefDate}
+                    onChange={(e) => setPrefDate(e.target.value)}
+                    title="الموعد المفضل" />
+                )}
+                <textarea className="sf-co-input" rows={2} placeholder="ملاحظات (اختياري)"
+                  value={customer.notes}
+                  onChange={(e) => setCustomer({ ...customer, notes: e.target.value })} />
+
+                {orderErr && <div className="sf-order-err">{orderErr}</div>}
+
+                <button className="sf-co-next" disabled={submitting} onClick={placeOrder}>
+                  {submitting ? '⏳ جاري الإرسال...' : '✅ تأكيد الطلب'}
+                </button>
+                <div className="sf-co-hint">لا حاجة لحساب أو دفع مسبق — الدفع عند الاستلام</div>
+              </div>
+            )}
+
+            {/* --- 3) النجاح --- */}
+            {checkout.step === 'done' && (
+              <div className="sf-co-body sf-co-done">
+                <div className="sf-co-check">✅</div>
+                <div className="sf-co-title">تم استلام طلبك!</div>
+                <div className="sf-co-number">رقم الطلب: <b>{checkout.orderNumber}</b></div>
+                <div className="sf-co-hint">
+                  {checkout.queued
+                    ? '📴 الإنترنت ضعيف — طلبك محفوظ وسيصل للمتجر تلقائياً عند عودة الاتصال'
+                    : 'احتفظ برقم الطلب — سيتواصل معك المتجر قريباً'}
+                </div>
+                {storeWaLink(store) && (
+                  <a
+                    className="sf-co-next"
+                    style={{ background: '#25D366', textDecoration: 'none', display: 'block', textAlign: 'center' }}
+                    href={`https://wa.me/${(store.whatsapp || store.phone || '').replace(/[^0-9]/g, '')}?text=${encodeURIComponent(orderWhatsappText(checkout.orderNumber, customer, checkout.items, cartTotal(checkout.items), checkout.type))}`}
+                    target="_blank" rel="noopener noreferrer"
+                    onClick={() => track('whatsapp_click', { storeId: store.id, ownerId: store.owner_id })}
+                  >
+                    💬 أرسل تفاصيل الطلب للمتجر واتساب
+                  </a>
+                )}
+                <button className="sf-co-close" onClick={() => setCheckout(null)}>إغلاق</button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -902,6 +1147,99 @@ const CSS = `
   background: var(--soft); border: 1px solid var(--accent);
   border-radius: 999px; padding: 4px 12px;
   font-size: 13px; color: var(--primary); font-weight: 700;
+}
+
+/* ---- الطلبات والسلة ---- */
+.sf-chip-btn { cursor: pointer; font-family: inherit; }
+.sf-chip-btn.sel {
+  background: var(--primary); color: var(--accent);
+  border-color: var(--primary); font-weight: 800;
+}
+.sf-order-err {
+  background: #fef2f2; color: #dc2626;
+  border: 1px solid #fecaca; border-radius: 10px;
+  padding: 9px 12px; font-size: 13px; font-weight: 700; margin-top: 10px;
+}
+.sf-order-row { display: flex; gap: 10px; margin-top: 14px; align-items: stretch; }
+.sf-qty-pick {
+  display: flex; align-items: center; gap: 10px;
+  background: #f8fafc; border: 1.5px solid #e2e8f0;
+  border-radius: 12px; padding: 4px 8px;
+}
+.sf-qty-pick button {
+  width: 30px; height: 30px; border: none; background: #fff;
+  border-radius: 8px; font-size: 16px; font-weight: 800;
+  cursor: pointer; font-family: inherit; color: var(--primary);
+  box-shadow: 0 1px 2px rgba(0,0,0,.08);
+}
+.sf-qty-pick span { min-width: 22px; text-align: center; font-weight: 800; color: var(--primary); }
+.sf-qty-pick.sm { padding: 2px 5px; gap: 5px; }
+.sf-qty-pick.sm button { width: 24px; height: 24px; font-size: 13px; }
+.sf-cart-btn {
+  flex: 1; display: block; width: 100%;
+  background: var(--accent); color: var(--accent-text);
+  border: none; border-radius: 12px; padding: 13px;
+  font-size: 15px; font-weight: 800; cursor: pointer; font-family: inherit;
+}
+.sf-book-btn { margin-top: 14px; }
+
+.sf-cartbar {
+  position: fixed; bottom: 74px; right: 16px; left: 16px;
+  max-width: 560px; margin: 0 auto;
+  background: var(--primary); color: #fff;
+  border: none; border-radius: 999px;
+  padding: 14px 22px; font-size: 15px; font-weight: 800;
+  cursor: pointer; font-family: inherit;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.35); z-index: 90;
+}
+.sf-cartbar-count { color: var(--accent); }
+.sf-cartbar-total { color: var(--accent); }
+@media (min-width: 900px) { .sf-cartbar { bottom: 24px; } }
+
+.sf-checkout { max-width: 480px; }
+.sf-co-body { padding: 20px 18px; }
+.sf-co-title { font-size: 18px; font-weight: 800; color: var(--primary); margin-bottom: 14px; }
+.sf-co-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 0; border-bottom: 1px dashed #f1f5f9;
+}
+.sf-co-img { width: 46px; height: 46px; border-radius: 10px; object-fit: cover; flex-shrink: 0; }
+.sf-co-info { flex: 1; min-width: 0; }
+.sf-co-name { font-size: 13.5px; font-weight: 800; color: var(--primary); }
+.sf-co-meta { font-size: 12px; color: #64748b; margin-top: 2px; }
+.sf-co-del { background: none; border: none; cursor: pointer; font-size: 14px; opacity: .7; }
+.sf-co-total {
+  text-align: left; font-size: 15px; color: var(--primary);
+  padding: 12px 0 4px;
+}
+.sf-co-input {
+  width: 100%; box-sizing: border-box;
+  padding: 13px 14px; border-radius: 12px;
+  border: 1.5px solid #e2e8f0; background: #fff;
+  font-size: 15px; font-family: inherit; outline: none;
+  margin-bottom: 10px;
+}
+.sf-co-input:focus { border-color: var(--accent); }
+.sf-co-next {
+  width: 100%; background: #16a34a; color: #fff;
+  border: none; border-radius: 13px; padding: 15px;
+  font-size: 15.5px; font-weight: 800; cursor: pointer;
+  font-family: inherit; margin-top: 6px;
+}
+.sf-co-next:disabled { opacity: .6; }
+.sf-co-hint { font-size: 12px; color: #94a3b8; text-align: center; margin-top: 10px; line-height: 1.7; }
+.sf-co-done { text-align: center; }
+.sf-co-check { font-size: 52px; }
+.sf-co-number {
+  background: var(--soft); border: 1.5px dashed var(--accent);
+  border-radius: 12px; padding: 12px; margin: 12px 0;
+  font-size: 15px; color: var(--primary);
+}
+.sf-co-close {
+  background: none; border: none; color: #94a3b8;
+  font-size: 13px; cursor: pointer; font-family: inherit;
+  margin-top: 12px; text-decoration: underline; width: 100%;
 }
 
 /* ---- التنقل السفلي ---- */

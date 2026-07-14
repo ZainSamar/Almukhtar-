@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase.js'
 import { track } from '../lib/analytics.js'
+import BrandIcon from '../components/BrandIcon.jsx'
 import {
   getCart, addToCart, updateCartQty, removeFromCart, clearCart,
   cartCount, cartTotal, validCustomer, submitOrder, orderWhatsappText,
@@ -510,13 +511,13 @@ export default function StoreFront() {
               >🔗 مشاركة</button>
             </div>
 
-            {/* روابط التواصل الاجتماعي */}
+            {/* روابط التواصل الاجتماعي — شعارات رسمية */}
             {store.socials && Object.entries(store.socials).some(([, v]) => v) && (
               <div className="sf-socials">
                 {Object.entries(store.socials).map(([id, url]) =>
                   url ? (
-                    <a key={id} href={url} target="_blank" rel="noopener noreferrer" className="sf-social" title={id}>
-                      {SOCIAL_ICONS[id] || '🔗'}
+                    <a key={id} href={url} target="_blank" rel="noopener noreferrer" className="sf-social-brand" title={id}>
+                      <BrandIcon id={id} size={20} />
                     </a>
                   ) : null
                 )}
@@ -953,6 +954,11 @@ const CSS = `
 .sf-pact-wa { background: #25D366; border-color: #25D366; color: #fff; }
 
 .sf-socials { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.sf-social-brand {
+  display: inline-flex; text-decoration: none;
+  transition: transform .12s;
+}
+.sf-social-brand:hover { transform: translateY(-3px) scale(1.05); }
 .sf-social {
   width: 40px; height: 40px; border-radius: 50%;
   background: #f1f5f9; display: flex; align-items: center; justify-content: center;

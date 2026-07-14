@@ -418,6 +418,140 @@ export default function SellerDashboard() {
     return Number.isFinite(t) && t > 0 ? t : LOW_STOCK
   }
 
+  // ===== نظام الطلبات =====
+  const [orders, setOrders] = useState([])
+  const [orderItems, setOrderItems] = useState({}) // order_id -> items[]
+  const [loadingOrders, setLoadingOrders] = useState(false)
+  const [orderFilter, setOrderFilter] = useState('active')
+  const [savingOrder, setSavingOrder] = useState(null)
+
+  const ORDER_STATUS = {
+    new: { label: 'جديد', color: '#2563EB', icon: '🆕' },
+    confirmed: { label: 'مؤكد', color: '#7C3AED', icon: '✅' },
+    preparing: { label: 'قيد التجهيز', color: '#D97706', icon: '📦' },
+    delivering: { label: 'مع التوصيل', color: '#0891B2', icon: '🚚' },
+    delivered: { label: 'تم التسليم', color: '#16A34A', icon: '🎉' },
+    cancelled: { label: 'ملغي', color: '#94A3B8', icon: '✖️' },
+    returned: { label: 'مرتجع', color: '#DC2626', icon: '↩️' },
+  }
+  const NEXT_STEP = {
+    new: { to: 'confirmed', label: '✅ تأكيد الطلب' },
+    confirmed: { to: 'preparing', label: '📦 بدء التجهيز' },
+    preparing: { to: 'delivering', label: '🚚 تسليم للتوصيل' },
+    delivering: { to: 'delivered', label: '🎉 تم التسليم' },
+  }
+
+  async function loadOrders() {
+    if (!store) return
+    setLoadingOrders(true)
+    try {
+      const { data: ords } = await supabase
+        .from('store_orders').select('*')
+        .eq('store_id', store.id)
+        .order('created_at', { ascending: false })
+      setOrders(ords || [])
+      const ids = (ords || []).map((o) => o.id)
+      if (ids.length) {
+        const { data: its } = await supabase
+          .from('store_order_items').select('*').in('order_id', ids)
+        const map = {}
+        for (const it of its || []) {
+          map[it.order_id] = map[it.order_id] || []
+          map[it.order_id].push(it)
+        }
+        setOrderItems(map)
+      } else setOrderItems({})
+    } catch (e) { console.error(e) }
+    setLoadingOrders(false)
+  }
+
+  // تحديث دوري: طلب جديد يظهر خلال 30 ثانية دون تحديث يدوي
+  useEffect(() => {
+    if (!store) return
+    loadOrders()
+    const t = setInterval(loadOrders, 30000)
+    return () => clearInterval(t)
+  }, [store])
+
+  const newOrdersCount = orders.filter((o) => o.status === 'new').length
+
+  // ===== خصم/إرجاع المخزون (يدعم مصفوفة قياس×لون) =====
+  async function adjustStockForOrder(order, dir) {
+    const items = orderItems[order.id] || []
+    for (const it of items) {
+      if (!it.product_id) continue
+      const p = products.find((x) => x.id === it.product_id)
+      if (!p) continue
+      const v = getV(p)
+      const delta = dir * it.qty
+      if (it.size && v.matrix?.[it.size]?.some((c) => c.name === it.color)) {
+        // خصم من تركيبة قياس×لون محددة
+        const matrix = { ...v.matrix }
+        matrix[it.size] = matrix[it.size].map((c) =>
+          c.name === it.color ? { ...c, qty: Math.max(0, (Number(c.qty) || 0) - delta) } : c
+        )
+        await persistVariants(p, { ...v, matrix })
+      } else if (it.size && v.sizeStock?.[it.size] !== undefined) {
+        // خصم من مخزون القياس
+        const ss = { ...v.sizeStock }
+        ss[it.size] = Math.max(0, (Number(ss[it.size]) || 0) - delta)
+        await persistVariants(p, { ...v, sizeStock: ss })
+      } else {
+        // خصم من الكمية العامة
+        const newQty = Math.max(0, qtyOf(p) - delta)
+        setProducts((prev) => prev.map((x) =>
+          x.id === p.id ? { ...x, stock_quantity: newQty, quantity: newQty, stock: newQty } : x
+        ))
+        await supabase.from('products').update({
+          stock_quantity: newQty, quantity: newQty, stock: newQty,
+          updated_at: new Date().toISOString(),
+        }).eq('id', p.id)
+      }
+    }
+  }
+
+  // ===== محرك الحالات =====
+  async function setOrderStatus(order, newStatus, note = '') {
+    setSavingOrder(order.id)
+    try {
+      const meta = { ...(order.meta || {}) }
+      // خصم المخزون مرة واحدة فقط عند التأكيد
+      if (newStatus === 'confirmed' && !meta.stock_deducted && order.order_type === 'product') {
+        await adjustStockForOrder(order, +1)
+        meta.stock_deducted = true
+      }
+      // إرجاع المخزون عند الإلغاء/الإرجاع إن كان قد خُصم
+      if ((newStatus === 'cancelled' || newStatus === 'returned') && meta.stock_deducted) {
+        await adjustStockForOrder(order, -1)
+        meta.stock_deducted = false
+      }
+      const { error } = await supabase.from('store_orders')
+        .update({ status: newStatus, meta, updated_at: new Date().toISOString() })
+        .eq('id', order.id)
+      if (error) throw error
+      await supabase.from('order_events').insert({
+        order_id: order.id, status: newStatus, note: note || null,
+      })
+      setOrders((prev) => prev.map((o) =>
+        o.id === order.id ? { ...o, status: newStatus, meta } : o
+      ))
+      showToast(`✓ ${ORDER_STATUS[newStatus].label}`)
+    } catch (e) {
+      console.error(e)
+      setMsg({ type: 'err', text: 'تعذر تحديث حالة الطلب — حاول مرة ثانية' })
+    }
+    setSavingOrder(null)
+  }
+
+  function agoText(iso) {
+    const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000)
+    if (mins < 1) return 'الآن'
+    if (mins < 60) return `قبل ${mins} دقيقة`
+    const hrs = Math.floor(mins / 60)
+    if (hrs < 24) return `قبل ${hrs} ساعة`
+    return `قبل ${Math.floor(hrs / 24)} يوم`
+  }
+
   // ===== تحميل وتجميع الإحصائيات (بيانات حقيقية فقط) =====
   useEffect(() => {
     if (view === 'stats' && store) loadStats()
@@ -850,6 +984,11 @@ export default function SellerDashboard() {
             onClick={() => setView('products')}>
             📦 {isRealestate ? 'عقاراتي' : isService ? 'خدماتي' : 'منتجاتي'}
           </button>
+          <button className={`sd-tab ${view === 'orders' ? 'active' : ''}`}
+            onClick={() => setView('orders')}>
+            🧾 الطلبات
+            {newOrdersCount > 0 && <span className="sd-tab-badge">{newOrdersCount}</span>}
+          </button>
           <button className={`sd-tab ${view === 'stats' ? 'active' : ''}`}
             onClick={() => setView('stats')}>
             📊 الإحصائيات والأداء
@@ -1051,6 +1190,157 @@ export default function SellerDashboard() {
               إلغاء
             </button>
           </div>
+        </div>
+      ) : view === 'orders' ? (
+        /* ================= الطلبات ================= */
+        <div className="sd-list-wrap">
+
+          {/* تقرير سريع */}
+          {(() => {
+            const today = new Date().toISOString().slice(0, 10)
+            const isToday = (o) => (o.created_at || '').slice(0, 10) === today
+            const delivered = orders.filter((o) => o.status === 'delivered')
+            const revenue = delivered.reduce((s, o) => s + (Number(o.items_total) || 0), 0)
+            return (
+              <div className="sd-stats">
+                <div className="sd-stat">
+                  <div className="sd-stat-num">{orders.filter(isToday).length}</div>
+                  <div className="sd-stat-label">طلبات اليوم</div>
+                </div>
+                <div className={`sd-stat ${newOrdersCount ? 'warn' : ''}`}>
+                  <div className="sd-stat-num">{newOrdersCount}</div>
+                  <div className="sd-stat-label">بانتظار التأكيد</div>
+                </div>
+                <div className="sd-stat">
+                  <div className="sd-stat-num">{delivered.length}</div>
+                  <div className="sd-stat-label">مسلّمة</div>
+                </div>
+                <div className="sd-stat">
+                  <div className="sd-stat-num" style={{ fontSize: 17 }}>{revenue.toLocaleString('en-US')}</div>
+                  <div className="sd-stat-label">إيراد المسلّم (د.ع)</div>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* فلترة الحالات */}
+          <div className="sd-filters">
+            <button className={`sd-filter ${orderFilter === 'active' ? 'active' : ''}`}
+              onClick={() => setOrderFilter('active')}>
+              ⚡ النشطة ({orders.filter((o) => !['delivered', 'cancelled', 'returned'].includes(o.status)).length})
+            </button>
+            <button className={`sd-filter ${orderFilter === 'all' ? 'active' : ''}`}
+              onClick={() => setOrderFilter('all')}>الكل ({orders.length})</button>
+            {Object.entries(ORDER_STATUS).map(([id, s]) => {
+              const n = orders.filter((o) => o.status === id).length
+              if (n === 0) return null
+              return (
+                <button key={id} className={`sd-filter ${orderFilter === id ? 'active' : ''}`}
+                  onClick={() => setOrderFilter(id)}>{s.icon} {s.label} ({n})</button>
+              )
+            })}
+          </div>
+
+          {loadingOrders && orders.length === 0 ? (
+            <div className="sd-state">⏳ جاري تحميل الطلبات...</div>
+          ) : (() => {
+            const list = orders.filter((o) =>
+              orderFilter === 'all' ? true
+                : orderFilter === 'active' ? !['delivered', 'cancelled', 'returned'].includes(o.status)
+                : o.status === orderFilter
+            )
+            if (list.length === 0) {
+              return (
+                <div className="sd-state">
+                  🧾 لا توجد طلبات هنا بعد
+                  <div style={{ fontSize: 13, color: '#94a3b8', marginTop: 6 }}>
+                    عندما يطلب زبون من متجرك سيظهر الطلب فوراً — مع تنبيه أحمر على التبويب
+                  </div>
+                </div>
+              )
+            }
+            return list.map((o) => {
+              const st = ORDER_STATUS[o.status] || ORDER_STATUS.new
+              const next = NEXT_STEP[o.status]
+              const its = orderItems[o.id] || []
+              const phone = (o.customer_phone || '').replace(/[^0-9]/g, '')
+              const waPhone = phone.startsWith('0') ? '964' + phone.slice(1) : phone
+              return (
+                <div key={o.id} className="sd-order" style={{ borderRightColor: st.color }}>
+                  <div className="sd-order-head">
+                    <span className="sd-order-num">{o.order_number}</span>
+                    <span className="sd-order-status" style={{ background: st.color }}>
+                      {st.icon} {st.label}
+                    </span>
+                    <span className="sd-order-ago">{agoText(o.created_at)}</span>
+                  </div>
+
+                  {o.order_type !== 'product' && (
+                    <div className="sd-order-type">
+                      {o.order_type === 'service' ? '📅 حجز خدمة' : '🏠 طلب معاينة'}
+                      {o.meta?.preferred_date && ` — الموعد المفضل: ${o.meta.preferred_date}`}
+                    </div>
+                  )}
+
+                  <div className="sd-order-cust">
+                    <div>
+                      <b>{o.customer_name}</b>
+                      <div className="sd-order-addr">
+                        📍 {[o.province, o.area, o.address].filter(Boolean).join('، ')}
+                      </div>
+                      {o.notes && <div className="sd-order-notes">📝 {o.notes}</div>}
+                    </div>
+                    <div className="sd-order-contact">
+                      <a href={`tel:${o.customer_phone}`} title="اتصال">📞</a>
+                      <a href={`https://wa.me/${waPhone}?text=${encodeURIComponent(`مرحباً ${o.customer_name} 👋 بخصوص طلبك ${o.order_number} من متجر ${store?.name_ar || ''}`)}`}
+                        target="_blank" rel="noopener noreferrer" title="واتساب">💬</a>
+                    </div>
+                  </div>
+
+                  {its.length > 0 && (
+                    <div className="sd-order-items">
+                      {its.map((it) => (
+                        <div key={it.id} className="sd-order-item">
+                          <span>{it.product_name}
+                            {(it.size || it.color) && <span className="sd-order-opts"> ({[it.size, it.color].filter(Boolean).join(' / ')})</span>}
+                          </span>
+                          <span>× {it.qty}</span>
+                        </div>
+                      ))}
+                      {Number(o.items_total) > 0 && (
+                        <div className="sd-order-total">
+                          الإجمالي: <b>{Number(o.items_total).toLocaleString('en-US')} د.ع</b>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* أزرار الحالة */}
+                  <div className="sd-order-actions">
+                    {next && (
+                      <button className="sd-order-next" disabled={savingOrder === o.id}
+                        onClick={() => setOrderStatus(o, next.to)}>
+                        {savingOrder === o.id ? '⏳' : next.label}
+                        {o.status === 'new' && o.order_type === 'product' && ' (يخصم المخزون)'}
+                      </button>
+                    )}
+                    {!['delivered', 'cancelled', 'returned'].includes(o.status) && (
+                      <button className="sd-order-cancel" disabled={savingOrder === o.id}
+                        onClick={() => window.confirm('إلغاء هذا الطلب؟ سيُعاد المخزون تلقائياً إن كان مخصوماً') && setOrderStatus(o, 'cancelled')}>
+                        إلغاء
+                      </button>
+                    )}
+                    {o.status === 'delivered' && (
+                      <button className="sd-order-cancel" disabled={savingOrder === o.id}
+                        onClick={() => window.confirm('تسجيل إرجاع؟ سيُعاد المخزون تلقائياً') && setOrderStatus(o, 'returned')}>
+                        ↩️ إرجاع
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })
+          })()}
         </div>
       ) : view === 'stats' ? (
         /* ================= الإحصائيات والأداء ================= */
@@ -1793,6 +2083,69 @@ const CSS = `
   cursor: pointer; font-family: inherit;
 }
 .sd-tab.active { background: #0A1D37; border-color: #0A1D37; color: #F5B93E; }
+.sd-tab-badge {
+  background: #dc2626; color: #fff;
+  font-size: 11px; font-weight: 800;
+  padding: 2px 8px; border-radius: 999px;
+  margin-right: 6px;
+}
+
+/* ---- بطاقات الطلبات ---- */
+.sd-order {
+  background: #fff; border-radius: 14px;
+  padding: 13px 14px; margin-bottom: 12px;
+  box-shadow: 0 1px 4px rgba(10,29,55,.07);
+  border-right: 4px solid #2563EB;
+}
+.sd-order-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sd-order-num { font-size: 14px; font-weight: 800; color: #0A1D37; direction: ltr; }
+.sd-order-status {
+  color: #fff; font-size: 11px; font-weight: 800;
+  padding: 3px 11px; border-radius: 999px;
+}
+.sd-order-ago { font-size: 11px; color: #94a3b8; margin-right: auto; }
+.sd-order-type {
+  font-size: 12.5px; font-weight: 700; color: #7C3AED;
+  background: #F5F3FF; border-radius: 8px;
+  padding: 6px 10px; margin-top: 8px;
+}
+.sd-order-cust {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 10px; margin-top: 10px; font-size: 13.5px; color: #0A1D37;
+}
+.sd-order-addr { font-size: 12px; color: #64748b; margin-top: 3px; }
+.sd-order-notes { font-size: 12px; color: #b45309; margin-top: 3px; }
+.sd-order-contact { display: flex; gap: 6px; flex-shrink: 0; }
+.sd-order-contact a {
+  width: 38px; height: 38px; border-radius: 10px;
+  background: #f1f5f9; display: flex; align-items: center; justify-content: center;
+  font-size: 16px; text-decoration: none;
+}
+.sd-order-items {
+  background: #f8fafc; border-radius: 10px;
+  padding: 9px 12px; margin-top: 10px;
+}
+.sd-order-item {
+  display: flex; justify-content: space-between;
+  font-size: 13px; color: #334155; padding: 3px 0;
+}
+.sd-order-opts { color: #94a3b8; font-size: 12px; }
+.sd-order-total {
+  border-top: 1px dashed #e2e8f0; margin-top: 6px; padding-top: 6px;
+  font-size: 13.5px; color: #0A1D37; text-align: left;
+}
+.sd-order-actions { display: flex; gap: 8px; margin-top: 12px; }
+.sd-order-next {
+  flex: 1; background: #16a34a; color: #fff;
+  border: none; border-radius: 11px; padding: 11px;
+  font-size: 13.5px; font-weight: 800; cursor: pointer; font-family: inherit;
+}
+.sd-order-next:disabled { opacity: .6; }
+.sd-order-cancel {
+  background: #f1f5f9; color: #64748b;
+  border: none; border-radius: 11px; padding: 11px 16px;
+  font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;
+}
 
 /* ---- بطاقات الإحصائيات ---- */
 .sd-an-cards {

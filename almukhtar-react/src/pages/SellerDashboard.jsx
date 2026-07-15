@@ -1616,7 +1616,7 @@ export default function SellerDashboard() {
                             const pickerOpen = colorPicker?.pid === p.id && colorPicker?.size === size
                             const usedNames = rows.map((c) => c.name)
                             return (
-                              <div key={size} className={`sd-mx-card ${cls}`}>
+                              <div key={size} className={`sd-mx-card ${cls} ${isOpen ? 'open' : ''}`}>
                                 {/* رأس البطاقة: القياس + الإجمالي — اضغط للتوسيع */}
                                 <button className="sd-mx-head" onClick={() => toggleSizeCard(p.id, size)}>
                                   <span className="sd-mx-size">{size}</span>
@@ -1971,8 +1971,45 @@ const CSS = `
 
 /* ---- مصفوفة قياس × لون ---- */
 .sd-matrix {
-  display: flex; flex-direction: column; gap: 6px;
-  flex-shrink: 0; width: 100%; max-width: 340px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px;
+  flex-shrink: 0;
+  width: 100%;
+  max-width: 340px;
+  min-width: 0;
+}
+/* البطاقة المفتوحة تأخذ العرض كاملاً */
+.sd-mx-card.open { grid-column: 1 / -1; }
+
+/* ---- موبايل: المقاسات صف كامل تحت معلومات المنتج ---- */
+@media (max-width: 760px) {
+  .sd-item { flex-wrap: wrap; }
+  .sd-item-info { min-width: 45%; }
+  .sd-matrix {
+    order: 10;
+    max-width: 100%;
+    margin-top: 4px;
+  }
+  .sd-qty { order: 9; margin-right: auto; }
+}
+
+/* ---- استجابة الموبايل: ترتيب عمودي بدل التداخل ---- */
+@media (max-width: 700px) {
+  .sd-item { flex-wrap: wrap; align-items: flex-start; }
+  .sd-item-img { order: 1; }
+  .sd-item-info { order: 2; flex: 1; min-width: 0; }
+  .sd-item-actions { order: 3; flex-direction: column; }
+  .sd-matrix {
+    order: 4;
+    width: 100%;
+    max-width: none;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px dashed #e2e8f0;
+  }
+  .sd-qty { order: 4; margin-top: 10px; margin-right: auto; }
+  .sd-mx-picker-grid { grid-template-columns: repeat(2, 1fr); }
 }
 .sd-mx-card {
   border: 1.5px solid #e2e8f0; border-radius: 11px;

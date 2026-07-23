@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../lib/supabase.js'
+import { productUrl, shareText, shareLinks, qrUrl, nativeShare, copyLink } from '../lib/productLink.js'
+import BrandIcon from '../components/BrandIcon.jsx'
 
 // ================================================================
 //  لوحة تحكم البائع — مع إدارة مخزون احترافية
@@ -215,6 +217,14 @@ export default function SellerDashboard() {
   const [toast, setToast] = useState(null) // تنبيه الحفظ الصغير
   const [colorPicker, setColorPicker] = useState(null) // {pid, size} قائمة إضافة لون مفتوحة
   const [customColor, setCustomColor] = useState({ name: '', hex: '#888888' })
+  const [shareP, setShareP] = useState(null) // المنتج المفتوح بلوحة المشاركة
+  const [shareCopied, setShareCopied] = useState(false)
+  const [shareQr, setShareQr] = useState(false)
+
+  async function onShareProduct(p) {
+    const ok = await nativeShare(p, store)
+    if (!ok) { setShareP(p); setShareQr(false); setShareCopied(false) }
+  }
 
   function showToast(text) {
     setToast(text)
@@ -1756,6 +1766,7 @@ export default function SellerDashboard() {
                   })()}
 
                   <div className="sd-item-actions">
+                    <button onClick={() => onShareProduct(p)} title="مشاركة المنتج" className="sd-share-btn">🔗</button>
                     <button onClick={() => startEdit(p)} title="تعديل">✏️</button>
                     <button onClick={() => remove(p)} title="حذف">🗑️</button>
                   </div>
@@ -1763,6 +1774,52 @@ export default function SellerDashboard() {
               )
             })
           )}
+        </div>
+      )}
+      {/* ===== لوحة مشاركة المنتج ===== */}
+      {shareP && (
+        <div className="sd-share-overlay" onClick={() => setShareP(null)}>
+          <div className="sd-share-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>🔗 مشاركة: {shareP.name}</h3>
+            {(() => {
+              const url = productUrl(shareP)
+              const links = shareLinks(url, shareText(shareP, store))
+              return (
+                <>
+                  <div className="sd-share-grid">
+                    <a href={links.whatsapp} target="_blank" rel="noopener noreferrer"><BrandIcon id="whatsapp" size={20} /> واتساب</a>
+                    <a href={links.facebook} target="_blank" rel="noopener noreferrer"><BrandIcon id="facebook" size={20} /> فيسبوك</a>
+                    <a href={links.telegram} target="_blank" rel="noopener noreferrer"><BrandIcon id="telegram" size={20} /> تيليغرام</a>
+                    <a href={links.x} target="_blank" rel="noopener noreferrer"><BrandIcon id="x" size={20} /> X</a>
+                  </div>
+                  <div className="sd-share-url">{url}</div>
+                  <button className="sd-share-copy" onClick={async () => {
+                    await copyLink(shareP, store)
+                    setShareCopied(true)
+                    setTimeout(() => setShareCopied(false), 1600)
+                  }}>
+                    {shareCopied ? '✓ تم نسخ الرابط' : '📋 نسخ الرابط'}
+                  </button>
+                  <div className="sd-share-row">
+                    <button onClick={() => setShareQr(!shareQr)}>
+                      {shareQr ? 'إخفاء QR' : '⬛ QR Code'}
+                    </button>
+                    <a href={`/product/${shareP.id}`} target="_blank" rel="noopener noreferrer">
+                      👁 فتح صفحة المنتج
+                    </a>
+                  </div>
+                  {shareQr && (
+                    <div className="sd-share-qr">
+                      <img src={qrUrl(url)} alt="QR" />
+                      <a href={qrUrl(url, 800)} download={`qr-${shareP.sku || 'product'}.png`}
+                        target="_blank" rel="noopener noreferrer">⬇ تنزيل للطباعة</a>
+                    </div>
+                  )}
+                </>
+              )
+            })()}
+            <button className="sd-share-close" onClick={() => setShareP(null)}>إغلاق</button>
+          </div>
         </div>
       )}
     </div>
@@ -2182,6 +2239,51 @@ const CSS = `
   background: #f1f5f9; color: #64748b;
   border: none; border-radius: 11px; padding: 11px 16px;
   font-size: 13px; font-weight: 700; cursor: pointer; font-family: inherit;
+}
+
+/* ---- لوحة مشاركة المنتج ---- */
+.sd-share-btn { background: #FFF8E8 !important; }
+.sd-share-overlay {
+  position: fixed; inset: 0; background: rgba(10,29,55,.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 150; padding: 16px;
+}
+.sd-share-modal {
+  background: #fff; border-radius: 20px; padding: 20px;
+  width: 100%; max-width: 380px; max-height: 90vh; overflow-y: auto;
+}
+.sd-share-modal h3 { margin: 0 0 14px; font-size: 15.5px; color: #0A1D37; }
+.sd-share-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sd-share-grid a {
+  display: flex; align-items: center; gap: 9px;
+  background: #f8fafc; border: 1.5px solid #e2e8f0; border-radius: 12px;
+  padding: 10px 12px; font-size: 13.5px; font-weight: 800;
+  color: #0A1D37; text-decoration: none;
+}
+.sd-share-url {
+  background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 10px;
+  padding: 9px 12px; font-size: 11px; color: #64748b;
+  direction: ltr; text-align: left; word-break: break-all; margin: 12px 0 10px;
+}
+.sd-share-copy {
+  width: 100%; background: #F5B93E; color: #111;
+  border: none; border-radius: 12px; padding: 12px;
+  font-size: 14px; font-weight: 800; cursor: pointer; font-family: inherit;
+}
+.sd-share-row { display: flex; gap: 10px; margin-top: 10px; }
+.sd-share-row button, .sd-share-row a {
+  flex: 1; background: #f1f5f9; color: #334155;
+  border: none; border-radius: 11px; padding: 10px;
+  font-size: 12.5px; font-weight: 700; cursor: pointer;
+  font-family: inherit; text-decoration: none; text-align: center;
+}
+.sd-share-qr { text-align: center; margin-top: 12px; }
+.sd-share-qr img { width: 190px; height: 190px; border-radius: 14px; border: 1px solid #e2e8f0; }
+.sd-share-qr a { display: block; margin-top: 8px; font-size: 12.5px; color: #1d4ed8; }
+.sd-share-close {
+  display: block; width: 100%; background: none; border: none;
+  color: #94a3b8; font-size: 13px; cursor: pointer;
+  font-family: inherit; margin-top: 12px; text-decoration: underline;
 }
 
 /* ---- بطاقات الإحصائيات ---- */

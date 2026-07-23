@@ -145,6 +145,7 @@ export async function submitOrder({ store, type = 'product', customer, items = [
   const orderItems = items.map((x) => ({
     order_id: orderId,
     product_id: x.productId,
+    variant_id: x.variantId || null,
     product_name: x.name,
     sku: x.sku || null,
     size: x.size || null,

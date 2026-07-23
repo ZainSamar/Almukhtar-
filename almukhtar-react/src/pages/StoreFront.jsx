@@ -267,7 +267,14 @@ export default function StoreFront() {
   const [selQty, setSelQty] = useState(1)
 
   useEffect(() => {
-    if (store) setCart(getCart(store.id))
+    if (store) {
+      const items = getCart(store.id)
+      setCart(items)
+      // قادم من «اشترِ الآن» بصفحة المنتج؟ نفتح السلة مباشرة
+      if (new URLSearchParams(window.location.search).get('checkout') === '1' && items.length > 0) {
+        setCheckout({ step: 'cart', type: 'product', items })
+      }
+    }
   }, [store])
 
   function productToItem(p, size, color, qty) {

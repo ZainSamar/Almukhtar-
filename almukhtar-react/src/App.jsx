@@ -7,6 +7,7 @@ import Store from './pages/Store.jsx'
 import Terms from './pages/Terms.jsx'
 import StoreFront from './pages/StoreFront.jsx'
 import Home from './pages/Home.jsx'
+import ProductPage from './pages/ProductPage.jsx'
 function App() {
   return (
     <BrowserRouter>
@@ -20,6 +21,8 @@ function App() {
         <Route path="/store" element={<Store />} />
         <Route path="/terms" element={<Terms />} />
          <Route path="/store/:slug" element={<StoreFront />} />
+        <Route path="/product/:pid" element={<ProductPage />} />
+        <Route path="/product/:pid/:slug" element={<ProductPage />} />
       </Routes>
     </BrowserRouter>
   )
